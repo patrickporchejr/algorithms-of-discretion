@@ -1,0 +1,38 @@
+Package: duboisR
+Title: Diagnostic Tools for Algorithmic Fairness Auditing (the Wells-Du Bois Protocol)
+Version: 0.0.0.9000
+Authors@R: person("Patrick Eugene", "Porché", , "porchewellness@gmail.com",
+                   role = c("aut", "cre"))
+Description: Diagnostic engine implementing the Wells-Du Bois Protocol for
+    auditing administrative traffic-stop data for encoded enforcement
+    discretion. Provides Datasheets-for-Datasets scaffolding (Gebru et al.
+    2021), composition and missingness auditing, tendentious-outcome and
+    identity-proxy diagnostics, a Veil of Darkness natural-experiment test,
+    a fast (non-hierarchical, non-MCMC) approximation to the Threshold Test
+    for infra-marginality (Simoiu, Corbett-Davies & Goel 2017), and
+    intersectional subpopulation disparity disaggregation (TPR/FPR/PPV
+    trade-offs).
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends: R (>= 4.1)
+Imports:
+    rlang,
+    ggplot2,
+    readr,
+    tibble,
+    cli,
+    jsonlite,
+    suncalc,
+    stats,
+    utils
+Suggests:
+    testthat (>= 3.0.0),
+    ranger,
+    withr,
+    devtools,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.1.0

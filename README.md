@@ -16,7 +16,7 @@ By examining data science in tandem with W.E.B. Du Bois's _double consciousness_
 This project separates data engineering, statistical estimation, and interactive visualization into a polyglot pipeline:
 
 - **Data Pipeline (Python):** Ingests standardized records from the Stanford Open Policing Project, pulls ACS (American Community Survey) 5-Year Census covariates via API, and performs spatial joins on County FIPS (Federal Information Processing Standards).
-- **`duboisR` Core Engine (R):** An internal R package/module that executes the _Wells-Du Bois Protocol_ for algorithmic auditing, including multivariable logistic regressions ($glm$), interaction effects, and quasi-experimental _Veil of Darkness_ tests.
+- **`duboisR` Core Engine (R):** an installable R package (`duboisR/`) implementing the _Wells-Du Bois Protocol_ for algorithmic auditing — multivariable logistic regressions with closed-form Wald CIs, a Veil of Darkness natural-experiment test, a fast Threshold Test approximation for infra-marginality, identity-proxy/tendentious-outcome diagnostics, subpopulation disparity disaggregation, and Datasheets-for-Datasets scaffolding. See `vignette("wells-du-bois-protocol", package = "duboisR")` for the theoretical grounding and each function's `?` help page for details.
 - **Audit Dashboard (R Shiny):** An interactive UI allowing policy researchers to layer demographic, socioeconomic, and environmental controls in real time to observe how disparity estimates shift.
 
 ---
@@ -24,7 +24,7 @@ This project separates data engineering, statistical estimation, and interactive
 ## Product Scope & Methodological Framing
 
 - **Primary Metrics:** Traffic stop rate, search rate, search "hit rate" (contraband yield).
-- **Geographic Scope:** Tiered sampling strategy focusing on 3–5 high-coverage states from the Stanford Open Policing Project (e.g., NC, CT, RI, TX) with standardized County FIPS and timestamp records.
+- **Geographic Scope:** Tiered sampling strategy targeting 3–5 high-coverage states from the Stanford Open Policing Project (e.g., NC, CT, RI, TX) with standardized County FIPS and timestamp records. **Currently implemented: Texas only** — the pipeline, dashboard, and Veil of Darkness county-centroid table are all TX-specific today; the other states are planned scope, not wired up yet (see Setup below).
 - **Toggleable Control Layers:**
   1. _Unadjusted / Raw Disparity_
   2. _+ Individual Demographics_ (Driver Sex — Texas State Patrol doesn't report driver age)
@@ -34,7 +34,7 @@ This project separates data engineering, statistical estimation, and interactive
 - **Deliverables:**
   - Interactive R Shiny Web Platform
   - Reproducible Quarto (`.qmd`) White Paper compiling to PDF/HTML
-  - `duboisR` R-package module for diagnostic fairness testing
+  - `duboisR` R package for diagnostic fairness testing (`duboisR/` — installable, tested, documented)
 
 ---
 
@@ -64,8 +64,14 @@ Administrative datasets reflect institutional policing practices rather than raw
 │   ├── raw/                 # Stanford Open Policing CSVs, Census API pulls (gitignored)
 │   └── processed/           # Merged, analysis-ready datasets (gitignored)
 ├── python/                  # Data acquisition, cleaning, spatial join
-├── r_dashboard/             # Shiny app: reactive modeling + visualization
-│   ├── R/                   # Shiny modules (regression, veil of darkness)
+├── duboisR/                 # R package: the Wells-Du Bois Protocol diagnostic engine
+│   ├── R/                   # glm_utils, veil_of_darkness, threshold_test, datasheet, ...
+│   ├── inst/extdata/        # bundled TX county centroids (Veil of Darkness geodata)
+│   ├── inst/templates/      # datasheet.md/.qmd scaffolding templates
+│   ├── tests/testthat/      # unit + parameter-recovery tests
+│   └── vignettes/           # theoretical grounding (QuantCrit, Du Bois, Wells)
+├── r_dashboard/             # Shiny app: reactive modeling + visualization (consumes duboisR)
+│   ├── R/                   # Shiny modules (regression, veil of darkness, threshold test, subpop disparities, data transparency)
 │   └── www/                 # CSS/static assets
 ├── notebooks/                # Scratch EDA, not pipeline code
 └── paper/                   # Quarto white paper (added once findings exist)
@@ -80,7 +86,11 @@ The pipeline currently targets **Texas** — the Stanford Open Policing
 ```bash
 # 1. Install R (the CLI, not the R.app cask — the cask installer needs sudo)
 brew install r
-Rscript -e 'install.packages(c("shiny","bslib","tidyverse","broom"), repos="https://cloud.r-project.org")'
+Rscript -e 'install.packages(c("shiny","bslib","tidyverse","broom","devtools"), repos="https://cloud.r-project.org")'
+
+# 1.5. Install duboisR itself (or just leave it -- r_dashboard/app.R falls back
+#      to `devtools::load_all("../duboisR")` automatically in dev mode)
+Rscript -e 'devtools::install("duboisR")'
 
 # 2. Python env
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -141,3 +151,16 @@ cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 
 Synthetic data is for plumbing checks only — treat any numbers it produces
 as meaningless.
+
+**Datasheet workflow.** The dashboard's "Data Transparency & Provenance" tab
+looks for a `datasheet.json` next to `audit_ready_stops.csv`. Generate one
+interactively with:
+
+```r
+devtools::load_all("duboisR")
+build_datasheet_wizard(output = "data/processed/datasheet.json")
+```
+
+or scaffold the plain-Markdown version (no automation of the reflection
+itself, by design — see the package's Datasheets-for-Datasets docs) with
+`use_datasheet()`.

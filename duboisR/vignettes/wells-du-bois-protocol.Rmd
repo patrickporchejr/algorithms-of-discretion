@@ -1,0 +1,110 @@
+---
+title: "The Wells-Du Bois Protocol"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The Wells-Du Bois Protocol}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Why "Wells-Du Bois"
+
+`duboisR` is named for two data journalists who used quantitative methods
+against the institutions that produced their data, rather than treating
+those numbers as neutral:
+
+- **W.E.B. Du Bois** pioneered statistical data visualization (most famously
+  the 1900 Paris Exposition infographics) to document Black American life
+  in a form white American statisticians of the era could not simply wave
+  away. He also gave us *double consciousness* — the experience of seeing
+  oneself simultaneously through one's own eyes and through the eyes of a
+  society that measures and administers you.
+- **Ida B. Wells** compiled and published statistical documentation of
+  lynching (*The Red Record*, 1895) specifically to refute the era's
+  official narrative that lynching was a response to crime — using the
+  perpetrators' own reporting against them.
+
+The protocol this package implements takes their shared method as a
+starting point: administrative data produced by an institution is not a
+transparent window onto the world that institution polices. It is a record
+of *that institution's decisions*, shaped by whatever discretion, priorities,
+and blind spots the institution itself has.
+
+## Three theoretical pillars
+
+**Critical Quantitative Foundations (QuantCrit).** Numbers are socially
+constructed, not neutral. A `search_conducted` column is not a fact about
+the world in the way a sensor reading is — it is a record of one officer's
+discretionary decision, made under whatever incentives, training, and bias
+that officer carried into the stop. Standard quantitative methods, applied
+without this framing, can encode and launder that discretion as if it were
+signal. `check_tendentious()` operationalizes this: it asks the researcher
+to explicitly classify whether an outcome variable is an objective
+measurement or an administrative/subjective decision, because the two
+require different epistemic caution.
+
+**Du Boisian double consciousness and institutional veils.** Administrative
+police data measures *enforcement discretion*, not the underlying behavior
+it is often assumed to proxy for. The `search_conducted` variable answers
+"who did an officer choose to search," not "who was carrying contraband" —
+the gap between those two questions is exactly the "veil" this package's
+tools are built to help see past. The [Veil of Darkness
+test](../reference/veil_of_darkness_test.html) is a direct, literal
+instantiation of this idea: it uses a natural experiment (an officer's
+reduced ability to observe race in the dark) to estimate how much of a
+daytime racial disparity in stops survives when the "veil" of darkness
+removes the officer's ability to act on race at all.
+
+**Subpopulation and intersectional representation.** Aggregate statistics
+can hide double standards of justice inside a single "average" number that
+looks reassuring. `audit_composition()` and `subpopulation_disparities()`
+exist to make that impossible by construction — they disaggregate by
+subpopulation (including intersectionally, e.g. race × sex) rather than
+reporting a single pooled figure, and `subpopulation_disparities()` reports
+the FPR/FNR/PPV trade-off across subgroups explicitly rather than pretending
+a single classifier can be simultaneously fair by every definition at once
+(a mathematical impossibility once base rates differ — see Chouldechova
+2017; Kleinberg, Mullainathan & Raghavan 2016).
+
+## From theory to diagnostics: what each function checks for
+
+| Protocol concern | Function |
+|---|---|
+| Is the outcome variable itself a proxy for human discretion, not an objective fact? | `check_tendentious()` |
+| Does excluding a protected attribute actually remove its information, or is it encoded in "neutral" covariates? | `check_proxies()` |
+| Are subpopulations represented, and is missingness itself patterned by subpopulation? | `audit_composition()` |
+| Does a daytime racial disparity survive when officers can't see race? | `veil_of_darkness_test()` |
+| Do apparent search/hit-rate disparities reflect different decision *thresholds*, or just different underlying risk distributions (infra-marginality)? | `aggregate_sufficient_statistics()` + `fit_threshold_test()` |
+| Is a single model's error rate hiding starkly different error rates by subgroup? | `subpopulation_disparities()` |
+| Has the researcher documented all of the above for anyone downstream who uses this dataset? | `use_datasheet()`, `build_datasheet_wizard()` |
+
+None of these functions produce a verdict on whether a dataset or model "is
+biased." They produce numbers a researcher needs to make that judgment
+themselves, and — per the Datasheets for Datasets philosophy this package
+also implements — they deliberately do not automate the qualitative
+reflection that judgment requires.
+
+## References
+
+- Gebru, T. et al. (2021). "Datasheets for Datasets." *Communications of
+  the ACM*, 64(12), 86-92.
+- Grogger, J. & Ridgeway, G. (2006). "Testing for Racial Profiling in
+  Traffic Stops From Behind a Veil of Darkness." *Journal of the American
+  Statistical Association*, 101(475), 878-887.
+- Simoiu, C., Corbett-Davies, S., & Goel, S. (2017). "The problem of
+  infra-marginality in outcome tests for discrimination." *Annals of
+  Applied Statistics*, 11(3), 1193-1216.
+- Pierson, E., Simoiu, C., Overgoor, J., Corbett-Davies, S., Ramachandran,
+  V., Phillips, C., & Goel, S. (2020). "A large-scale analysis of racial
+  disparities in police stops across the United States." *Nature Human
+  Behaviour*, 4, 736-745.
+- Chouldechova, A. (2017). "Fair prediction with disparate impact: A study
+  of bias in recidivism prediction instruments." *Big Data*, 5(2), 153-163.
+- Kleinberg, J., Mullainathan, S., & Raghavan, M. (2016). "Inherent
+  Trade-Offs in the Fair Determination of Risk Scores." *arXiv:1609.05807*.
+- Benjamin, R. (2019). *Race After Technology: Abolitionist Tools for the
+  New Jim Code*. Polity.

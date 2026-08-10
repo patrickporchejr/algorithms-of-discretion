@@ -1,0 +1,12 @@
+{
+  "motivation": {
+    "purpose": "To audit racial disparities in Texas traffic stops using the Wells-Du Bois Protocol.",
+    "funder": "Independent research, no external funding."
+  },
+  "composition": {
+    "instances": "Each row is a single traffic stop recorded by Texas State Patrol, 2015-2017.",
+    "subpopulations": "subject_race (white/black/hispanic), subject_sex.",
+    "sensitive_data": "Yes -- race and sex are sensitive attributes.",
+    "missing_info": "contraband_found is NA whenever no search occurred; not otherwise missing at random."
+  }
+}

@@ -1,58 +1,35 @@
-# Shiny module: builds a logistic regression formula reactively from the
-# sidebar toggles and renders an odds-ratio forest plot + summary table.
+# Shiny module: renders an odds-ratio forest plot + summary table from a
+# fitted audit GLM.
 #
-# Depends on ../../data/processed/audit_ready_stops.csv existing — see
-# README for the real-data pipeline that produces it.
+# The statistical core (formula construction, the GLM fit, and its
+# closed-form Wald confidence intervals) lives in the duboisR package
+# (R/glm_utils.R: build_formula(), fit_audit_glm()) rather than here, so it's
+# tested and reusable outside Shiny. This module is now a thin reactive
+# wrapper around that package API.
+#
+# The audit_fit() reactive itself lives in app.R's server(), not here --
+# mod_subpop_disparities.R needs the same fitted model to score against, so
+# it's shared across both modules the same way stops_data() is (see app.R).
 
 regression_module_ui <- function(id) {
   ns <- NS(id)
   tagList(
-    plotOutput(ns("forest_plot")),
+    # fill = FALSE is the load-bearing part: plotOutput() defaults to
+    # fill = TRUE, which makes bslib treat it as a flex item inside
+    # navset_card_tab's card body and stretch/shrink it to the flex
+    # container's computed height -- overriding the explicit height below.
+    # When that flex computation collapses toward 0 (viewport-dependent),
+    # ggplot's theme margins exceed the device size and grid throws
+    # "figure margins too large". fill = FALSE takes the plot out of the
+    # flex layout so height = "420px" is actually respected.
+    plotOutput(ns("forest_plot"), height = "420px", fill = FALSE),
     tableOutput(ns("model_table"))
   )
 }
 
-regression_module_server <- function(id, outcome_var, controls) {
+regression_module_server <- function(id, audit_fit) {
   moduleServer(id, function(input, output, session) {
-    stops_data <- reactive({
-      path <- "../data/processed/audit_ready_stops.csv"
-      validate(need(file.exists(path), "No processed dataset yet — run the Python pipeline first."))
-      d <- readr::read_csv(path, show_col_types = FALSE)
-      # glm() otherwise picks the reference level alphabetically ("black"),
-      # silently contradicting the "relative to white drivers" plot header.
-      d$subject_race <- stats::relevel(factor(d$subject_race), ref = "white")
-      d
-    })
-
-    model_formula <- reactive({
-      f <- paste(outcome_var(), "~ subject_race")
-      if ("demographics" %in% controls()) f <- paste(f, "+ subject_sex")
-      if ("poverty" %in% controls()) f <- paste(f, "+ poverty_rate")
-      if ("income" %in% controls()) f <- paste(f, "+ median_income")
-      if ("time" %in% controls()) f <- paste(f, "+ factor(hour)")
-      as.formula(f)
-    })
-
-    fitted_model <- reactive({
-      glm(model_formula(), data = stops_data(), family = "binomial")
-    })
-
-    # Wald CIs (estimate +/- 1.96*SE on the log-odds scale, then exponentiated),
-    # computed directly from summary() rather than via broom::tidy(conf.int=TRUE).
-    # broom delegates to confint.glm(), which defaults to profile-likelihood CIs —
-    # each one requires refitting the model multiple times, which is fine at
-    # textbook sample sizes but effectively hangs at 5.6M rows. Wald CIs are the
-    # standard choice at this scale and are a closed-form calculation.
-    model_summary <- reactive({
-      coefs <- summary(fitted_model())$coefficients
-      df <- tibble::as_tibble(coefs, rownames = "term")
-      colnames(df) <- c("term", "estimate", "std.error", "statistic", "p.value")
-      z <- stats::qnorm(0.975)
-      df$conf.low <- exp(df$estimate - z * df$std.error)
-      df$conf.high <- exp(df$estimate + z * df$std.error)
-      df$estimate <- exp(df$estimate)
-      df
-    })
+    model_summary <- reactive({ audit_fit()$summary })
 
     output$forest_plot <- renderPlot({
       model_df <- model_summary() |>
