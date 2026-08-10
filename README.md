@@ -27,7 +27,7 @@ This project separates data engineering, statistical estimation, and interactive
 - **Geographic Scope:** Tiered sampling strategy focusing on 3–5 high-coverage states from the Stanford Open Policing Project (e.g., NC, CT, RI, TX) with standardized County FIPS and timestamp records.
 - **Toggleable Control Layers:**
   1. _Unadjusted / Raw Disparity_
-  2. _+ Individual Demographics_ (Driver Age, Driver Sex)
+  2. _+ Individual Demographics_ (Driver Sex — Texas State Patrol doesn't report driver age)
   3. _+ Socioeconomic Context_ (County Median Household Income, Poverty Rate)
   4. _+ Environmental Discretion_ (Time of Day / Sunset Daylight Status via Veil of Darkness)
 - **Target Audience:** Computational social scientists, policy researchers, and data engineers. UI is designed for legible exploration of regression outputs.
@@ -73,24 +73,55 @@ Administrative datasets reflect institutional policing practices rather than raw
 
 ## Setup
 
-The full pipeline (real Stanford Open Policing + Census data) isn't runnable
-end to end yet — see Open Questions. Python deps in `requirements.txt`; R
-deps to be pinned via `renv` once the Shiny app has real package usage.
-
-You can still run the **Shiny dashboard against synthetic data** to verify
-the app itself works:
+The pipeline currently targets **Texas** — the Stanford Open Policing
+"State Patrol" file (statewide, county-level, 2006-2017). Other states
+(NC, CT, RI) can be wired the same way later.
 
 ```bash
 # 1. Install R (the CLI, not the R.app cask — the cask installer needs sudo)
 brew install r
-
-# 2. Install the R packages the dashboard uses
 Rscript -e 'install.packages(c("shiny","bslib","tidyverse","broom"), repos="https://cloud.r-project.org")'
 
-# 3. Generate a fake data/processed/audit_ready_stops.csv
-Rscript r_dashboard/dev/generate_synthetic_data.R
+# 2. Python env
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# 4. Run the app
+# 3. Get a free Census API key (https://api.census.gov/data/key_signup.html)
+#    and put it in a repo-root .env file: CENSUS_API_KEY=your_key_here
+
+# 4. Download the raw Texas State Patrol CSV (~1GB zipped, ~7.2GB unzipped —
+#    01/02 below read directly from the .zip, no need to unzip by hand)
+curl -L -o data/raw/tx_statewide_2020_04_01.csv.zip \
+  "https://stacks.stanford.edu/file/druid:yg821jf8611/yg821jf8611_tx_statewide_2020_04_01.csv.zip"
+
+# 5. Run the pipeline
+cd python
+../.venv/bin/python 01_fetch_census.py   # -> data/raw/census_stratifiers.csv (254 TX counties)
+../.venv/bin/python 02_clean_stops.py    # -> data/processed/stops_clean.csv (filters to 2015-2017)
+../.venv/bin/python 03_merge_features.py # -> data/processed/audit_ready_stops.csv (~5.6M rows)
+
+# 6. Run the app
+cd ../r_dashboard && Rscript -e 'shiny::runApp(".")'
+```
+
+**Schema realities discovered wiring this up** (the raw Stanford file doesn't
+match the originally assumed schema):
+- No FIPS code at the stop level — only `county_name` text. The pipeline
+  joins stops to Census county data on a normalized name (`county_join_key`),
+  not FIPS; FIPS is carried through from the Census side afterward.
+- No arrest outcome — `outcome` is only ever `"warning"` or `"citation"`.
+  The dashboard's second target metric is `contraband_found` (search hit
+  rate) instead of an arrest indicator, matching the README's own stated
+  primary metrics.
+- No `subject_age` — Texas State Patrol doesn't report it. The
+  "demographics" control layer is driver sex only.
+- 27.4M raw rows is too large for an interactive `glm()`; `02_clean_stops.py`
+  filters to 2015-2017 (~5.6M rows), which fits in ~9s per model refit.
+
+You can still run the **Shiny dashboard against synthetic data** for pure
+plumbing checks, without any of the above:
+
+```bash
+Rscript r_dashboard/dev/generate_synthetic_data.R
 cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 ```
 

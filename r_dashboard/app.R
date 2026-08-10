@@ -1,14 +1,19 @@
 # Algorithms of Discretion — Shiny audit dashboard
 #
-# Not runnable yet: r_dashboard/R modules expect
-# ../data/processed/audit_ready_stops.csv, which doesn't exist until the
-# Python pipeline (python/01-03) has run against a real, decided-on state
-# dataset. See README Open Questions #1.
+# Expects ../data/processed/audit_ready_stops.csv, produced by the Python
+# pipeline (python/01-03) against Texas State Patrol (Stanford Open Policing)
+# + ACS county data. See README for the real-data setup.
+
+# macOS defaults bitmapType to "quartz", which needs an active window-server
+# session. When the app runs from a background/non-interactive process
+# (Rscript launched without a foreground GUI session), quartz plot devices
+# hang indefinitely instead of erroring — renderPlot() never resolves, so the
+# forest plot area just stays blank forever. Cairo works headless.
+if (capabilities("cairo")) options(bitmapType = "cairo")
 
 library(shiny)
 library(bslib)
 library(tidyverse)
-library(broom)
 
 source("R/mod_regression.R")
 
@@ -22,13 +27,13 @@ ui <- page_sidebar(
       "outcome_var", "Target Outcome:",
       choices = c(
         "Search Conducted" = "search_conducted",
-        "Arrest Made" = "is_arrested"
+        "Contraband Found" = "contraband_found"
       )
     ),
     checkboxGroupInput(
       "controls", "Layer Intersectional Controls:",
       choices = c(
-        "Driver Age & Sex" = "demographics",
+        "Driver Sex" = "demographics",
         "County Poverty Rate" = "poverty",
         "County Median Income" = "income",
         "Time of Day" = "time"
