@@ -1,13 +1,13 @@
 # Algorithms of Discretion
 
-An interactive data audit platform and diagnostic suite examining how socioeconomic and spatial/environmental covariates modify (or fail to modify) apparent racial disparities in U.S. traffic stop outcomes.
+An interactive data audit platform examining how socioeconomic and spatial/environmental covariates modify (or fail to modify) apparent racial disparities in U.S. traffic stops.
 
 This repository serves as the applied computational data engine for the white paper:
 
 > **The Algorithmic Color Line: Auditing "Algorithms of Discretion" via QuantCrit and Du Boisian Sociology**  
 > _By: Patrick Eugene Porché Jr._
 
-Placing empirical data science in conversation with W.E.B. Du Bois's _double consciousness_ and Ruha Benjamin's _Race After Technology_, this project demonstrates how administrative police data (and the machine learning models trained on it) encode historical enforcement discretion rather than underlying driver behavior.
+By examining data science in tandem with W.E.B. Du Bois's _double consciousness_ and Ruha Benjamin's _Race After Technology_, this project demonstrates how administrative police data (and the machine learning models trained on it) encode historical enforcement discretion rather than underlying driver behavior.
 
 ---
 
@@ -30,7 +30,7 @@ This project separates data engineering, statistical estimation, and interactive
   2. _+ Individual Demographics_ (Driver Age, Driver Sex)
   3. _+ Socioeconomic Context_ (County Median Household Income, Poverty Rate)
   4. _+ Environmental Discretion_ (Time of Day / Sunset Daylight Status via Veil of Darkness)
-- **Target Audience:** Computational social scientists, policy researchers, and data engineers. Heavy on statistical rigor and econometric validity; UI is designed for legible exploration of regression outputs.
+- **Target Audience:** Computational social scientists, policy researchers, and data engineers. UI is designed for legible exploration of regression outputs.
 - **Deliverables:**
   - Interactive R Shiny Web Platform
   - Reproducible Quarto (`.qmd`) White Paper compiling to PDF/HTML
@@ -73,6 +73,40 @@ Administrative datasets reflect institutional policing practices rather than raw
 
 ## Setup
 
-Not yet runnable end to end — see Open Questions. Python deps in
-`requirements.txt`; R deps to be pinned via `renv` once the Shiny app
-has real package usage.
+The full pipeline (real Stanford Open Policing + Census data) isn't runnable
+end to end yet — see Open Questions. Python deps in `requirements.txt`; R
+deps to be pinned via `renv` once the Shiny app has real package usage.
+
+You can still run the **Shiny dashboard against synthetic data** to verify
+the app itself works:
+
+```bash
+# 1. Install R (the CLI, not the R.app cask — the cask installer needs sudo)
+brew install r
+
+# 2. Install the R packages the dashboard uses
+Rscript -e 'install.packages(c("shiny","bslib","tidyverse","broom"), repos="https://cloud.r-project.org")'
+
+# 3. Generate a fake data/processed/audit_ready_stops.csv
+Rscript r_dashboard/dev/generate_synthetic_data.R
+
+# 4. Run the app
+cd r_dashboard && Rscript -e 'shiny::runApp(".")'
+```
+
+**macOS gotchas** if package installs fail to compile:
+- If `xcode-select -p` points at a broken/corrupted Xcode.app (symptom:
+  `xcrun` errors about `xcodebuild` even for unrelated tools like `clang`),
+  point it at the Command Line Tools instead:
+  `sudo xcode-select -s /Library/Developer/CommandLineTools`
+- If compilation fails with `invalid value 'gnu23'`, your CLT's clang is too
+  old for R's default C standard. Force an older one via `~/.R/Makevars`:
+  ```
+  CC = clang -std=gnu17
+  CFLAGS = -Wall -g -O2
+  ```
+- `tidyverse` (via `ragg`/`textshaping`) needs a few system libs:
+  `brew install harfbuzz fribidi libtiff`
+
+Synthetic data is for plumbing checks only — treat any numbers it produces
+as meaningless.
