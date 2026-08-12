@@ -84,21 +84,13 @@ gemini_response_schema <- function(schema) {
 
 #' Extract a provider's own error message from a failed response
 #'
-#' httr2's default failure message is just "HTTP 400 Bad Request" -- useless
-#' for diagnosing *why* a provider rejected a request. All three providers
-#' return a JSON body with the actual reason on 4xx/5xx, so this is wired
-#' into every client via `httr2::req_error(body = ...)` to surface it.
-#'
-#' Most providers nest the message as `{"error": {"message": "..."}}`, but
-#' some (observed from xAI/Grok) instead return `{"error": "message
-#' string"}` -- `error` itself a bare string, not an object. `info$error` is
-#' then an atomic character vector, and `$message` on an atomic vector is a
-#' hard error ("$ operator is invalid for atomic vectors"), not a NULL --
-#' unlike `NULL$message`, which quietly returns NULL. That crashed this
-#' function while it was handling an error response, which httr2 then
-#' reported as an opaque parse failure instead of the real one. `is.list()`
-#' checks below distinguish "nested object" from "bare string" at each level
-#' before ever using `$`.
+#' All three providers return a JSON error body on 4xx/5xx with more detail
+#' than httr2's default "HTTP 400 Bad Request" -- wired into every client via
+#' `httr2::req_error(body = ...)` to surface it. `is.list()` guards every
+#' `$`/`[[` access below because at least one provider (xAI) returns `error`
+#' as a bare string rather than a nested `{message: ...}` object, and `$` on
+#' an atomic vector errors instead of returning NULL (see
+#' `test-llm_clients.R`'s regression test for this shape).
 #'
 #' @param resp An httr2 response object.
 #' @return A character vector to append to the error message.

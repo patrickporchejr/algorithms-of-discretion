@@ -13,20 +13,12 @@ api_error_body(resp)
 A character vector to append to the error message.
 }
 \description{
-httr2's default failure message is just "HTTP 400 Bad Request" -- useless
-for diagnosing \emph{why} a provider rejected a request. All three providers
-return a JSON body with the actual reason on 4xx/5xx, so this is wired
-into every client via \code{httr2::req_error(body = ...)} to surface it.
-}
-\details{
-Most providers nest the message as \code{{"error": {"message": "..."}}}, but
-some (observed from xAI/Grok) instead return \code{{"error": "message string"}} -- \code{error} itself a bare string, not an object. \code{info$error} is
-then an atomic character vector, and \verb{$message} on an atomic vector is a
-hard error ("$ operator is invalid for atomic vectors"), not a NULL --
-unlike \code{NULL$message}, which quietly returns NULL. That crashed this
-function while it was handling an error response, which httr2 then
-reported as an opaque parse failure instead of the real one. \code{is.list()}
-checks below distinguish "nested object" from "bare string" at each level
-before ever using \code{$}.
+All three providers return a JSON error body on 4xx/5xx with more detail
+than httr2's default "HTTP 400 Bad Request" -- wired into every client via
+\code{httr2::req_error(body = ...)} to surface it. \code{is.list()} guards every
+\code{$}/\code{[[} access below because at least one provider (xAI) returns \code{error}
+as a bare string rather than a nested \code{{message: ...}} object, and \code{$} on
+an atomic vector errors instead of returning NULL (see
+\code{test-llm_clients.R}'s regression test for this shape).
 }
 \keyword{internal}

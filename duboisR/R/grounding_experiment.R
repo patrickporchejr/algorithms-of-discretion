@@ -163,17 +163,14 @@ build_grounding_prompt <- function(condition = c("naive", "grounded"), data_cont
 
 #' Safely pull one field out of one question's `{answer, confidence}` entry
 #'
-#' Every provider is asked to return `{answer, confidence}` for each
-#' question via a forced tool/schema call (see [call_anthropic()] etc.), but
-#' "forced" isn't "guaranteed" -- a provider can still return a bare scalar
-#' (e.g. `"TRUE"` instead of `{"answer": "TRUE", "confidence": 90}`) for one
-#' question instead of the nested object the schema asked for. A scalar is
-#' an atomic vector, and `[[`/`$` name-lookup on an atomic vector is a hard
-#' error ("$ operator is invalid for atomic vectors"), not the NULL a
-#' missing named list element would quietly give -- which crashed the whole
-#' multi-provider run over one provider's one non-conforming field. This
-#' treats that the same as an outright-missing question: NA downstream, not
-#' an abort (same `is.list()`-guard shape as [api_error_body()]).
+#' "Forced" structured output isn't "guaranteed": a provider can still
+#' return a bare scalar (e.g. `"TRUE"`) for one question instead of the
+#' nested `{answer, confidence}` object the schema asked for, and `[[`/`$`
+#' on a scalar (an atomic vector) errors rather than returning NULL the way
+#' it would on a missing list element. `is.list()` guards against that (same
+#' shape as [api_error_body()]), treating a non-conforming field as an
+#' outright-missing one -- NA downstream, not an abort of the whole
+#' multi-provider run.
 #'
 #' @param entry The value at `answers[[question_id]]` -- expected to be
 #'   `list(answer = ..., confidence = ...)` but not guaranteed to be.

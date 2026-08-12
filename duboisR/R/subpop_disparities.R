@@ -66,7 +66,7 @@ subpopulation_disparities <- function(model_fit, data, actual_col,
   predicted_positive <- predicted_prob >= threshold
   actual_positive <- as.logical(data[[actual_col]])
 
-  group <- do.call(paste, c(as.list(data[subgroup_cols]), sep = "_"))
+  group <- dubois_group_key(data, subgroup_cols)
 
   groups <- split(seq_along(group), group)
   rows <- lapply(names(groups), function(g) {

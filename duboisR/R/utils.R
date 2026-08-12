@@ -45,6 +45,20 @@ md_table <- function(df, digits = 3) {
   paste(c(header, sep, rows), collapse = "\n")
 }
 
+#' Build an intersectional group key by pasting one or more columns together
+#'
+#' e.g. `subject_race` x `subject_sex` -> `"black_female"`. Shared by
+#' [audit_composition()] and [subpopulation_disparities()] so both key
+#' subpopulation groups the same way.
+#'
+#' @param data A data frame.
+#' @param cols Character vector of one or more column names.
+#' @return A character vector, one element per row of `data`.
+#' @keywords internal
+dubois_group_key <- function(data, cols) {
+  do.call(paste, c(as.list(data[cols]), sep = "_"))
+}
+
 #' Abort with a clear message if required columns are missing
 #'
 #' @param data A data frame.

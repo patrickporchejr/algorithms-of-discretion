@@ -17,16 +17,13 @@ The field's value, or \code{NULL} if \code{entry} isn't a list or has no
 such field.
 }
 \description{
-Every provider is asked to return \verb{\{answer, confidence\}} for each
-question via a forced tool/schema call (see \code{\link[=call_anthropic]{call_anthropic()}} etc.), but
-"forced" isn't "guaranteed" -- a provider can still return a bare scalar
-(e.g. \code{"TRUE"} instead of \verb{\{"answer": "TRUE", "confidence": 90\}}) for one
-question instead of the nested object the schema asked for. A scalar is
-an atomic vector, and \code{[[}/\code{$} name-lookup on an atomic vector is a hard
-error ("$ operator is invalid for atomic vectors"), not the NULL a
-missing named list element would quietly give -- which crashed the whole
-multi-provider run over one provider's one non-conforming field. This
-treats that the same as an outright-missing question: NA downstream, not
-an abort (same \code{is.list()}-guard shape as \code{\link[=api_error_body]{api_error_body()}}).
+"Forced" structured output isn't "guaranteed": a provider can still
+return a bare scalar (e.g. \code{"TRUE"}) for one question instead of the
+nested \verb{\{answer, confidence\}} object the schema asked for, and \code{[[}/\code{$}
+on a scalar (an atomic vector) errors rather than returning NULL the way
+it would on a missing list element. \code{is.list()} guards against that (same
+shape as \code{\link[=api_error_body]{api_error_body()}}), treating a non-conforming field as an
+outright-missing one -- NA downstream, not an abort of the whole
+multi-provider run.
 }
 \keyword{internal}

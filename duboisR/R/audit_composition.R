@@ -30,11 +30,7 @@ audit_composition <- function(data, group_col, missing_col = NULL, weight_col = 
   if (!is.null(weight_col)) abort_if_missing_cols(data, weight_col)
 
   grouped <- data
-  if (length(group_col) > 1) {
-    grouped$.dubois_group <- do.call(paste, c(as.list(data[group_col]), sep = "_"))
-  } else {
-    grouped$.dubois_group <- as.character(data[[group_col]])
-  }
+  grouped$.dubois_group <- dubois_group_key(data, group_col)
 
   weights <- if (!is.null(weight_col)) data[[weight_col]] else rep(1, nrow(data))
 
