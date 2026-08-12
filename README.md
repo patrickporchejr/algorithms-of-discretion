@@ -60,17 +60,20 @@ Administrative datasets reflect institutional policing practices rather than raw
 ## Repo Layout
 
 ```
+├── Makefile                 # DAG over the pipeline: `make all` (data), `make results` (+ precompute)
 ├── data/
 │   ├── raw/                 # Stanford Open Policing CSVs, Census API pulls (gitignored)
 │   └── processed/           # Merged, analysis-ready datasets (gitignored)
+├── results/                 # Precomputed model fits the dashboard reads (gitignored, see below)
 ├── python/                  # Data acquisition, cleaning, spatial join
 ├── duboisR/                 # R package: the Wells-Du Bois Protocol diagnostic engine
 │   ├── R/                   # glm_utils, veil_of_darkness, threshold_test, datasheet, ...
 │   ├── inst/extdata/        # bundled TX county centroids (Veil of Darkness geodata)
+│   ├── inst/scripts/        # precompute_audit.R -- the CLI that populates results/
 │   ├── inst/templates/      # datasheet.md/.qmd scaffolding templates
 │   ├── tests/testthat/      # unit + parameter-recovery tests
 │   └── vignettes/           # theoretical grounding (QuantCrit, Du Bois, Wells)
-├── r_dashboard/             # Shiny app: reactive modeling + visualization (consumes duboisR)
+├── r_dashboard/             # Shiny app: renders results/*.rds (consumes duboisR)
 │   ├── R/                   # Shiny modules (regression, veil of darkness, threshold test, subpop disparities, data transparency)
 │   └── www/                 # CSS/static assets
 ├── notebooks/                # Scratch EDA, not pipeline code
@@ -80,8 +83,9 @@ Administrative datasets reflect institutional policing practices rather than raw
 ## Setup
 
 The pipeline currently targets **Texas** — the Stanford Open Policing
-"State Patrol" file (statewide, county-level, 2006-2017). Other states
-(NC, CT, RI) can be wired the same way later.
+"State Patrol" file (statewide, county-level, 2006-2017). See
+[Pointing the pipeline at a different state](#pointing-the-pipeline-at-a-different-state)
+below to adapt it.
 
 ```bash
 # 1. Install R (the CLI, not the R.app cask — the cask installer needs sudo)
@@ -99,19 +103,64 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 #    and put it in a repo-root .env file: CENSUS_API_KEY=your_key_here
 
 # 4. Download the raw Texas State Patrol CSV (~1GB zipped, ~7.2GB unzipped —
-#    01/02 below read directly from the .zip, no need to unzip by hand)
+#    the pipeline reads directly from the .zip, no need to unzip by hand)
 curl -L -o data/raw/tx_statewide_2020_04_01.csv.zip \
   "https://stacks.stanford.edu/file/druid:yg821jf8611/yg821jf8611_tx_statewide_2020_04_01.csv.zip"
 
-# 5. Run the pipeline
-cd python
-../.venv/bin/python 01_fetch_census.py   # -> data/raw/census_stratifiers.csv (254 TX counties)
-../.venv/bin/python 02_clean_stops.py    # -> data/processed/stops_clean.csv (filters to 2015-2017)
-../.venv/bin/python 03_merge_features.py # -> data/processed/audit_ready_stops.csv (~5.6M rows)
+# 5. Build everything: the 3-step Python pipeline, then every model fit the
+#    dashboard serves. `make` only reruns steps whose inputs actually
+#    changed -- see `make -n all results` to preview what would run.
+make all       # -> data/processed/audit_ready_stops.csv (~5.6M rows)
+make results   # -> results/*.rds (~2min, mostly Veil of Darkness's sunset/dusk pass over
+               #    the full dataset -- see duboisR/inst/scripts/precompute_audit.R)
 
-# 6. Run the app
-cd ../r_dashboard && Rscript -e 'shiny::runApp(".")'
+# 6. Run the app -- it renders results/*.rds, it does not fit models live
+cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 ```
+
+`make clean` removes every generated file (`data/raw/census_stratifiers.csv`,
+`data/processed/*.csv`, `results/`) so you can rebuild from scratch; it does
+*not* touch the raw Stanford download, since that's not something `make`
+generates. If you only want to run one pipeline step by hand (e.g. to debug
+it), each script is still directly runnable — see the `Makefile` for the
+exact `Rscript`/`python` invocations and working directories it uses.
+
+### Pointing the pipeline at a different state
+
+The Stanford Open Policing Project publishes one "State Patrol" file per
+state, each at its own URL (Stanford's `stacks.stanford.edu` assigns a
+unique "druid" ID per file — there's no predictable pattern to construct it
+from a state abbreviation). To point this pipeline at a different state:
+
+1. Go to the [data page](https://openpolicing.stanford.edu/data/), find your
+   target state's State Patrol download link, and copy its actual URL (same
+   as step 4 above, just for a different state).
+2. Update what's currently Texas-hardcoded:
+   - **`python/01_fetch_census.py`**: `TARGET_STATE_FIPS` (Texas is `"48"` —
+     look up your state's 2-digit FIPS code).
+   - **`python/02_clean_stops.py`**: the raw file path passed to
+     `clean_stops(...)` in `if __name__ == "__main__":`, and
+     `RAW_COLUMNS_NEEDED` if the new state's file has different column
+     coverage — Stanford's schema isn't fully uniform across states (Texas,
+     for instance, has no `subject_age` and no arrest outcome; check the new
+     file's header before assuming parity — see "Schema realities" below).
+   - **`Makefile`**: the `RAW_STOPS` variable, to match the new raw filename.
+   - **`duboisR`'s county centroid table**: `dubois_tx_centroids()` /
+     `inst/extdata/tx_county_centroids.csv` is Texas-only today (FIPS prefix
+     `48`). Veil of Darkness needs a lat/lon centroid per county to compute
+     sunset/dusk, so without a matching centroid table it'll warn "no
+     centroid match" and drop every row. Regenerate one by adapting
+     `duboisR/data-raw/build_tx_county_centroids.R` — its source is a
+     *national* Census Gazetteer file it already downloads; just change the
+     `substr(.data$GEOID, 1, 2) == "48"` filter to your state's FIPS prefix.
+     This is genuinely Texas-hardcoded rather than a config toggle today
+     (`compute_daylight_status()` takes a `centroids` argument, but nothing
+     in the dashboard exposes swapping it) — matches the "Currently
+     implemented: Texas only" note in Product Scope above.
+3. Re-run `make all && make results`. Because the raw file, target FIPS, and
+   centroid table are all different inputs now, Make will detect the
+   relevant steps as stale and rebuild them; use `make clean` first if you
+   want a fully fresh run.
 
 **Schema realities discovered wiring this up** (the raw Stanford file doesn't
 match the originally assumed schema):
@@ -124,16 +173,30 @@ match the originally assumed schema):
   primary metrics.
 - No `subject_age` — Texas State Patrol doesn't report it. The
   "demographics" control layer is driver sex only.
-- 27.4M raw rows is too large for an interactive `glm()`; `02_clean_stops.py`
-  filters to 2015-2017 (~5.6M rows), which fits in ~9s per model refit.
+- 27.4M raw rows is too large to fit live in an interactive session;
+  `02_clean_stops.py` filters to 2015-2017 (~5.6M rows). Even at that size,
+  `make results` fits and caches every model once (~2min, mostly Veil of
+  Darkness's sunset/dusk pass) rather than the dashboard refitting per
+  session — see `duboisR/inst/scripts/precompute_audit.R`.
 
 You can still run the **Shiny dashboard against synthetic data** for pure
 plumbing checks, without any of the above:
 
 ```bash
-Rscript r_dashboard/dev/generate_synthetic_data.R
+Rscript r_dashboard/dev/generate_synthetic_data.R      # writes data/processed/audit_ready_stops.csv
+Rscript duboisR/inst/scripts/precompute_audit.R         # -> results/*.rds, same as `make results`
 cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 ```
+
+**Both of these write to the same paths the real pipeline uses** (there's no
+`--output` flag) — if you already have a real dataset built, back up
+`data/processed/audit_ready_stops.csv` and `results/` first, or you'll
+overwrite them with synthetic numbers. To get back to the real data
+afterward: if `data/raw/` and `data/processed/stops_clean.csv` are still
+around, `make data && make results` only needs to redo the fast merge step,
+not the full pipeline (Make's staleness check is timestamp-based, so `touch`
+the still-real upstream files first if their mtimes ended up older than the
+synthetic run).
 
 **macOS gotchas** if package installs fail to compile:
 - If `xcode-select -p` points at a broken/corrupted Xcode.app (symptom:
