@@ -44,6 +44,29 @@ test_that("check_proxies works with method = 'rf' when ranger is installed", {
   expect_true(res$flagged)
 })
 
+test_that("check_proxies (method = 'glm') doesn't let a shorter predictor name steal a longer one's coefficients", {
+  # Regression test: "hour" is a string-prefix of "hour_bucket". Before the
+  # longest-name-first fix, startsWith(names(z), "hour") matched both
+  # predictors' model.matrix() coefficients, inflating "hour"'s importance
+  # with "hour_bucket"'s and never correctly isolating "hour_bucket"'s own.
+  set.seed(3)
+  n <- 600
+  hour <- sample(0:23, n, replace = TRUE)
+  # hour_bucket is the actual (near-perfect) proxy for race; hour itself is noise.
+  hour_bucket <- ifelse(hour < 12, "am", "pm")
+  race <- ifelse(hour_bucket == "am",
+    sample(c("white", "black"), n, replace = TRUE, prob = c(0.95, 0.05)),
+    sample(c("white", "black"), n, replace = TRUE, prob = c(0.05, 0.95))
+  )
+  d <- data.frame(subject_race = race, hour = hour, hour_bucket = hour_bucket, stringsAsFactors = FALSE)
+
+  res <- check_proxies(d, protected_attr = "subject_race", predictors = c("hour", "hour_bucket"),
+                        method = "glm", seed = 42)
+
+  expect_true(res$flagged)
+  expect_gt(res$importance[["hour_bucket"]], res$importance[["hour"]])
+})
+
 test_that("format.duboisR_proxy_check returns Markdown text", {
   d <- .make_proxy_fixture()
   res <- check_proxies(d, protected_attr = "subject_race", predictors = "county_fips", method = "glm", seed = 42)

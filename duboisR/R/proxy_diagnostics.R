@@ -137,9 +137,20 @@ check_proxies <- function(data, protected_attr = "subject_race", predictors,
     coefs <- summary(fit)$coefficients
     z <- abs(coefs[, "z value"])
     z <- z[setdiff(names(z), "(Intercept)")]
-    for (p in predictors) {
-      matched <- z[startsWith(names(z), p)]
-      if (length(matched) > 0) importance[[p]] <- max(importance[[p]], max(matched, na.rm = TRUE))
+    # Match longest predictor names first, claiming their coefficients out of
+    # the pool as we go -- otherwise a shorter predictor whose name is a
+    # string-prefix of a longer one's (e.g. "hour" vs. a hypothetical
+    # "hour_bucket") would have startsWith() match both predictors'
+    # model.matrix() coefficient names, silently inflating the shorter
+    # predictor's importance with the longer one's coefficients too.
+    ordered_predictors <- predictors[order(-nchar(predictors))]
+    remaining <- z
+    for (p in ordered_predictors) {
+      matched <- remaining[startsWith(names(remaining), p)]
+      if (length(matched) > 0) {
+        importance[[p]] <- max(importance[[p]], max(matched, na.rm = TRUE))
+        remaining <- remaining[!startsWith(names(remaining), p)]
+      }
     }
   }
 
