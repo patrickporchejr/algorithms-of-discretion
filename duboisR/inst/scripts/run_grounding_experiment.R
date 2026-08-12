@@ -32,11 +32,35 @@ if (file.exists(".env")) readRenviron(".env")
 DATA_PATH <- "data/processed/audit_ready_stops.csv"
 DATASHEET_PATH <- "data/processed/datasheet.json"
 RESULTS_DIR <- "results"
-# 2 independent trials per (provider, condition) -- doubles the call count
-# (and roughly the token spend) over a single run, in exchange for a
-# majority-vote answer and a per-question stability rate instead of trusting
-# one draw. See summarize_grounding_trials().
-N_REPEATS <- 2
+# Every completed (provider, condition, trial) call is saved here as the run
+# goes, so a crash/timeout/Ctrl-C partway through (real API calls, so this
+# does happen -- rate limits, a provider hiccup, a malformed error body) lets
+# the next invocation pick back up instead of re-billing every call already
+# made. Deleted on a fully successful run so the *next* `make grounding`
+# starts fresh, per the Makefile's "re-running is itself sometimes the
+# point" note -- this checkpoint is for resuming an interrupted run, not for
+# caching a completed one indefinitely. Pass --restart to ignore/overwrite
+# an existing checkpoint and start over even if one is present.
+CHECKPOINT_PATH <- file.path(RESULTS_DIR, "grounding_experiment_checkpoint.rds")
+CLI_ARGS <- commandArgs(trailingOnly = TRUE)
+RESTART <- "--restart" %in% CLI_ARGS
+
+# Independent trials per (provider, condition) -- each extra repeat adds
+# another full pass over every provider (and roughly that much more token
+# spend), in exchange for a majority-vote answer and a per-question
+# stability rate instead of trusting one draw. See
+# summarize_grounding_trials(). Default 2; override with --repeats=N (e.g.
+# --repeats=1 while iterating on a bug, to halve the billed calls).
+REPEATS_ARG <- grep("^--repeats=", CLI_ARGS, value = TRUE)
+N_REPEATS <- if (length(REPEATS_ARG) > 0) {
+  n <- suppressWarnings(as.integer(sub("^--repeats=", "", REPEATS_ARG[[1]])))
+  if (is.na(n) || n < 1) {
+    stop("--repeats must be a positive integer, got: ", REPEATS_ARG[[1]])
+  }
+  n
+} else {
+  2
+}
 
 # Update these to whatever flagship models you want to compare -- only
 # providers with a matching *_API_KEY set in .env are actually called.
@@ -82,6 +106,13 @@ if (!file.exists(DATASHEET_PATH)) {
 }
 dir.create(RESULTS_DIR, showWarnings = FALSE, recursive = TRUE)
 
+if (RESTART && file.exists(CHECKPOINT_PATH)) {
+  file.remove(CHECKPOINT_PATH)
+  cat("--restart passed: ignoring existing checkpoint at", CHECKPOINT_PATH, "\n")
+} else if (file.exists(CHECKPOINT_PATH)) {
+  cat("Resuming from checkpoint at", CHECKPOINT_PATH, "(pass --restart to start over)\n")
+}
+
 cat(
   "Running grounding experiment against:", paste(PROVIDERS, collapse = ", "),
   sprintf("(%d trial(s) per condition)...\n", N_REPEATS)
@@ -91,7 +122,9 @@ result <- run_grounding_experiment(
   datasheet_path = DATASHEET_PATH,
   providers = PROVIDERS,
   models = MODELS,
-  n_repeats = N_REPEATS
+  n_repeats = N_REPEATS,
+  checkpoint_path = CHECKPOINT_PATH,
+  restart = RESTART
 )
 
 # Save before printing -- every API call above is already made and billed
@@ -100,5 +133,10 @@ result <- run_grounding_experiment(
 # print failure still leaves the .rds on disk.
 saveRDS(result, file.path(RESULTS_DIR, "grounding_experiment.rds"))
 cat("Wrote", file.path(RESULTS_DIR, "grounding_experiment.rds"), "\n")
+
+# The run finished cleanly and is fully captured in grounding_experiment.rds
+# above -- clear the checkpoint so the next run starts fresh instead of
+# silently replaying these same (cached, now-stale-by-the-next-run) answers.
+if (file.exists(CHECKPOINT_PATH)) file.remove(CHECKPOINT_PATH)
 
 print(result)

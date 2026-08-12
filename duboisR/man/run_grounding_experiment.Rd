@@ -11,7 +11,9 @@ run_grounding_experiment(
   models,
   questions = grounding_questions(),
   id_cols = "county_fips",
-  n_repeats = 1
+  n_repeats = 1,
+  checkpoint_path = NULL,
+  restart = FALSE
 )
 }
 \arguments{
@@ -38,6 +40,18 @@ sampling noise (providers aren't run at temperature 0 -- see
 \code{llm_clients.R} for why); repeats let \code{\link[=summarize_grounding_trials]{summarize_grounding_trials()}}
 report a majority-vote answer and a stability/agreement rate instead
 of trusting one draw. Default 1.}
+
+\item{checkpoint_path}{Optional path to an \code{.rds} file where completed
+(provider, condition, trial) rows are saved after every API call. If
+the file already exists and has rows, matching (provider, model,
+condition, trial) combinations are loaded from it instead of re-called
+-- so a run interrupted by a crash or a transient provider error can
+pick back up without re-billing every already-answered call. A
+checkpoint with zero rows (or that fails to load) is treated the same
+as no checkpoint at all. Default \code{NULL} (no checkpointing).}
+
+\item{restart}{If \code{TRUE}, ignore and overwrite any existing
+\code{checkpoint_path} rather than resuming from it. Default \code{FALSE}.}
 }
 \value{
 An object of class \code{duboisR_grounding_result} wrapping a tibble

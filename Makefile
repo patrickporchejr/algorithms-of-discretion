@@ -38,9 +38,14 @@ $(RESULTS_STAMP): $(PRECOMPUTE_SCRIPT) $(AUDIT_READY) $(wildcard duboisR/R/*.R)
 # Opt-in, not part of `all`/`results`: makes real, billed LLM API calls and
 # needs ANTHROPIC_API_KEY/OPENAI_API_KEY in .env (see README). Always reruns
 # rather than tracking a timestamp, since re-running is itself sometimes the
-# point (checking a model's answers haven't drifted).
+# point (checking a model's answers haven't drifted). If a previous run
+# crashed partway through, this resumes from its checkpoint automatically;
+# pass RESTART=1 (make grounding RESTART=1) to ignore that checkpoint and
+# start over from scratch. Pass REPEATS=1 (make grounding REPEATS=1) to cut
+# billed calls in half while iterating on something, instead of the default
+# 2 trials per condition.
 grounding: $(AUDIT_READY)
-	Rscript $(GROUNDING_SCRIPT)
+	Rscript $(GROUNDING_SCRIPT) $(if $(RESTART),--restart) $(if $(REPEATS),--repeats=$(REPEATS))
 
 clean:
 	rm -f $(CENSUS_RAW) $(STOPS_CLEAN) $(AUDIT_READY)

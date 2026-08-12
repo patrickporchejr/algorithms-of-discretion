@@ -161,6 +161,31 @@ build_grounding_prompt <- function(condition = c("naive", "grounded"), data_cont
   list(system = system, user = user)
 }
 
+#' Safely pull one field out of one question's `{answer, confidence}` entry
+#'
+#' Every provider is asked to return `{answer, confidence}` for each
+#' question via a forced tool/schema call (see [call_anthropic()] etc.), but
+#' "forced" isn't "guaranteed" -- a provider can still return a bare scalar
+#' (e.g. `"TRUE"` instead of `{"answer": "TRUE", "confidence": 90}`) for one
+#' question instead of the nested object the schema asked for. A scalar is
+#' an atomic vector, and `[[`/`$` name-lookup on an atomic vector is a hard
+#' error ("$ operator is invalid for atomic vectors"), not the NULL a
+#' missing named list element would quietly give -- which crashed the whole
+#' multi-provider run over one provider's one non-conforming field. This
+#' treats that the same as an outright-missing question: NA downstream, not
+#' an abort (same `is.list()`-guard shape as [api_error_body()]).
+#'
+#' @param entry The value at `answers[[question_id]]` -- expected to be
+#'   `list(answer = ..., confidence = ...)` but not guaranteed to be.
+#' @param field `"answer"` or `"confidence"`.
+#' @return The field's value, or `NULL` if `entry` isn't a list or has no
+#'   such field.
+#' @keywords internal
+extract_answer_field <- function(entry, field) {
+  if (!is.list(entry)) return(NULL)
+  entry[[field]]
+}
+
 #' @keywords internal
 score_answer <- function(type, answer, expected, tolerance) {
   if (identical(type, "numeric")) {
@@ -202,6 +227,16 @@ score_answer <- function(type, answer, expected, tolerance) {
 #'   `llm_clients.R` for why); repeats let [summarize_grounding_trials()]
 #'   report a majority-vote answer and a stability/agreement rate instead
 #'   of trusting one draw. Default 1.
+#' @param checkpoint_path Optional path to an `.rds` file where completed
+#'   (provider, condition, trial) rows are saved after every API call. If
+#'   the file already exists and has rows, matching (provider, model,
+#'   condition, trial) combinations are loaded from it instead of re-called
+#'   -- so a run interrupted by a crash or a transient provider error can
+#'   pick back up without re-billing every already-answered call. A
+#'   checkpoint with zero rows (or that fails to load) is treated the same
+#'   as no checkpoint at all. Default `NULL` (no checkpointing).
+#' @param restart If `TRUE`, ignore and overwrite any existing
+#'   `checkpoint_path` rather than resuming from it. Default `FALSE`.
 #' @return An object of class `duboisR_grounding_result` wrapping a tibble
 #'   `results` with one row per (provider, condition, trial, question):
 #'   `provider`, `model`, `condition`, `trial`, `question_id`, `type`,
@@ -211,7 +246,7 @@ score_answer <- function(type, answer, expected, tolerance) {
 #' @export
 run_grounding_experiment <- function(data_path, datasheet_path, providers, models,
                                       questions = grounding_questions(), id_cols = "county_fips",
-                                      n_repeats = 1) {
+                                      n_repeats = 1, checkpoint_path = NULL, restart = FALSE) {
   providers <- rlang::arg_match(providers, c("anthropic", "openai", "gemini", "grok"), multiple = TRUE)
   missing_models <- setdiff(providers, names(models))
   if (length(missing_models) > 0) {
@@ -219,6 +254,19 @@ run_grounding_experiment <- function(data_path, datasheet_path, providers, model
       '`models` is missing an entry for: %s. Pass e.g. list(anthropic = "claude-opus-5").',
       paste(missing_models, collapse = ", ")
     ))
+  }
+
+  # A checkpoint is keyed on (provider, model, condition, trial) -- model is
+  # included so that changing a provider's model in MODELS (e.g. bumping
+  # "claude-opus-5" to a newer release) invalidates that provider's old rows
+  # instead of silently mixing answers from two different models under one
+  # results tibble.
+  completed <- NULL
+  if (!is.null(checkpoint_path) && !restart && file.exists(checkpoint_path)) {
+    loaded <- tryCatch(readRDS(checkpoint_path), error = function(e) NULL)
+    if (!is.null(loaded) && is.data.frame(loaded) && nrow(loaded) > 0) {
+      completed <- loaded
+    }
   }
 
   data <- readr::read_csv(data_path, show_col_types = FALSE)
@@ -255,13 +303,27 @@ run_grounding_experiment <- function(data_path, datasheet_path, providers, model
       )
 
       for (trial in seq_len(n_repeats)) {
+        existing <- if (!is.null(completed)) {
+          completed[
+            completed$provider == provider & completed$model == model &
+              completed$condition == condition & completed$trial == trial,
+          ]
+        } else {
+          NULL
+        }
+
+        if (!is.null(existing) && nrow(existing) > 0) {
+          runs[[length(runs) + 1]] <- existing
+          next
+        }
+
         answers <- call_fn(prompt$system, prompt$user, schema, model)
         answer <- unname(vapply(ids, function(id) {
-          a <- answers[[id]]$answer
+          a <- extract_answer_field(answers[[id]], "answer")
           if (is.null(a)) NA_character_ else as.character(a)
         }, character(1)))
         confidence <- unname(vapply(ids, function(id) {
-          c_val <- answers[[id]]$confidence
+          c_val <- extract_answer_field(answers[[id]], "confidence")
           if (is.null(c_val)) NA_real_ else as.numeric(c_val)
         }, numeric(1)))
         correct <- unname(mapply(score_answer, types, answer, expected, tolerance))
@@ -272,6 +334,13 @@ run_grounding_experiment <- function(data_path, datasheet_path, providers, model
           answer = answer, confidence = confidence, expected_answer = expected,
           correct = correct, rationale = rationale
         )
+
+        # Checkpoint after every real API call (not after cache hits, which
+        # would just rewrite the same bytes) so a crash on trial N never
+        # loses the N-1 calls that already succeeded and were already billed.
+        if (!is.null(checkpoint_path)) {
+          saveRDS(do.call(rbind, runs), checkpoint_path)
+        }
       }
     }
   }

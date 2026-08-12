@@ -89,13 +89,28 @@ gemini_response_schema <- function(schema) {
 #' return a JSON body with the actual reason on 4xx/5xx, so this is wired
 #' into every client via `httr2::req_error(body = ...)` to surface it.
 #'
+#' Most providers nest the message as `{"error": {"message": "..."}}`, but
+#' some (observed from xAI/Grok) instead return `{"error": "message
+#' string"}` -- `error` itself a bare string, not an object. `info$error` is
+#' then an atomic character vector, and `$message` on an atomic vector is a
+#' hard error ("$ operator is invalid for atomic vectors"), not a NULL --
+#' unlike `NULL$message`, which quietly returns NULL. That crashed this
+#' function while it was handling an error response, which httr2 then
+#' reported as an opaque parse failure instead of the real one. `is.list()`
+#' checks below distinguish "nested object" from "bare string" at each level
+#' before ever using `$`.
+#'
 #' @param resp An httr2 response object.
 #' @return A character vector to append to the error message.
 #' @keywords internal
 api_error_body <- function(resp) {
   info <- tryCatch(httr2::resp_body_json(resp), error = function(e) NULL)
-  msg <- info$error$message %||% info$message %||% NULL
-  if (!is.null(msg)) return(msg)
+  if (is.list(info)) {
+    err <- info$error
+    msg <- if (is.list(err)) err$message else err
+    msg <- msg %||% info$message
+    if (!is.null(msg) && length(msg) > 0) return(as.character(msg)[[1]])
+  }
   tryCatch(httr2::resp_body_string(resp), error = function(e) NULL)
 }
 

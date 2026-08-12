@@ -95,6 +95,56 @@ test_that("score_answer does exact match for boolean/enum and tolerance-band mat
   expect_false(score_answer("numeric", "not a number", "10", 2))
 })
 
+test_that("extract_answer_field returns the named field from a well-formed entry", {
+  expect_equal(extract_answer_field(list(answer = "TRUE", confidence = 90), "answer"), "TRUE")
+  expect_equal(extract_answer_field(list(answer = "TRUE", confidence = 90), "confidence"), 90)
+})
+
+test_that("extract_answer_field returns NULL, not an error, for a missing field or a non-list entry", {
+  expect_null(extract_answer_field(list(answer = "TRUE"), "confidence"))
+  expect_null(extract_answer_field(NULL, "answer"))
+  # Regression test: a provider that doesn't strictly honor the forced
+  # {answer, confidence} object schema and instead returns a bare scalar
+  # for a question (e.g. answers$q1 <- "TRUE" instead of
+  # answers$q1 <- list(answer = "TRUE", confidence = 90)) used to crash
+  # run_grounding_experiment() with "$ operator is invalid for atomic
+  # vectors" -- see grounding_experiment.R.
+  expect_null(extract_answer_field("TRUE", "answer"))
+  expect_null(extract_answer_field(42, "answer"))
+})
+
+test_that("run_grounding_experiment tolerates a provider returning a bare scalar instead of {answer, confidence} for one question", {
+  tmp_csv <- withr::local_tempfile(fileext = ".csv")
+  readr::write_csv(dubois_test_stops(n = 5), tmp_csv)
+  fixture_datasheet <- testthat::test_path("fixtures", "datasheet_example.json")
+
+  # q_bool comes back schema-conforming; q_enum comes back as a bare string
+  # (not nested under answer/confidence) -- simulates a provider that
+  # doesn't strictly honor the forced tool schema for every field.
+  mock_call <- function(system, user, schema, model, api_key = "fake") {
+    list(
+      q_bool = list(answer = "TRUE", confidence = 90),
+      q_enum = "a",
+      q_numeric = list(answer = 10, confidence = 80)
+    )
+  }
+  testthat::local_mocked_bindings(call_anthropic = mock_call)
+
+  result <- run_grounding_experiment(
+    tmp_csv, fixture_datasheet,
+    providers = "anthropic", models = list(anthropic = "test-model"), questions = test_questions
+  )
+
+  r <- result$results
+  q_enum_rows <- r[r$question_id == "q_enum", ]
+  expect_true(all(is.na(q_enum_rows$answer)))
+  expect_true(all(is.na(q_enum_rows$confidence)))
+  expect_false(any(q_enum_rows$correct)) # NA answer never scores correct
+
+  q_bool_rows <- r[r$question_id == "q_bool", ]
+  expect_equal(q_bool_rows$answer, rep("TRUE", nrow(q_bool_rows)))
+})
+
 test_that("run_grounding_experiment aborts when `models` is missing a requested provider", {
   expect_error(
     run_grounding_experiment("irrelevant.csv", "irrelevant.json", providers = "anthropic", models = list(), questions = test_questions),
@@ -187,6 +237,119 @@ test_that("run_grounding_experiment with n_repeats runs multiple independent tri
   r <- result$results
   expect_equal(nrow(r), 18) # 3 questions x 2 conditions x 3 trials
   expect_setequal(r$trial, c(1, 2, 3))
+})
+
+test_that("run_grounding_experiment resumes from a checkpoint instead of re-calling already-completed trials", {
+  tmp_csv <- withr::local_tempfile(fileext = ".csv")
+  readr::write_csv(dubois_test_stops(n = 5), tmp_csv)
+  fixture_datasheet <- testthat::test_path("fixtures", "datasheet_example.json")
+  checkpoint <- withr::local_tempfile(fileext = ".rds")
+
+  call_count <- 0
+  # Fails on the 3rd call (of 4: naive trial 1, naive trial 2, grounded
+  # trial 1, grounded trial 2) -- simulates a crash partway through a run.
+  flaky_call <- function(system, user, schema, model, api_key = "fake") {
+    call_count <<- call_count + 1
+    if (call_count == 3) stop("simulated transient failure")
+    list(
+      q_bool = list(answer = "TRUE", confidence = 50),
+      q_enum = list(answer = "a", confidence = 50),
+      q_numeric = list(answer = 10, confidence = 50)
+    )
+  }
+  testthat::local_mocked_bindings(call_anthropic = flaky_call)
+
+  expect_error(
+    run_grounding_experiment(
+      tmp_csv, fixture_datasheet,
+      providers = "anthropic", models = list(anthropic = "test-model"),
+      questions = test_questions, n_repeats = 2, checkpoint_path = checkpoint
+    ),
+    "simulated transient failure"
+  )
+  expect_true(file.exists(checkpoint))
+  expect_equal(call_count, 3) # crashed on the 3rd call, so only 2 succeeded
+
+  # Second run resumes: the first 2 calls are served from the checkpoint,
+  # so only the 2 remaining trials (the one that crashed, plus the last one)
+  # actually call the (now-fixed) provider function.
+  call_count <- 0
+  reliable_call <- function(system, user, schema, model, api_key = "fake") {
+    call_count <<- call_count + 1
+    list(
+      q_bool = list(answer = "TRUE", confidence = 50),
+      q_enum = list(answer = "a", confidence = 50),
+      q_numeric = list(answer = 10, confidence = 50)
+    )
+  }
+  testthat::local_mocked_bindings(call_anthropic = reliable_call)
+
+  result <- run_grounding_experiment(
+    tmp_csv, fixture_datasheet,
+    providers = "anthropic", models = list(anthropic = "test-model"),
+    questions = test_questions, n_repeats = 2, checkpoint_path = checkpoint
+  )
+  expect_equal(call_count, 2) # only the 2 not-yet-completed trials were called
+  expect_equal(nrow(result$results), 12) # 3 questions x 2 conditions x 2 trials, all present
+})
+
+test_that("run_grounding_experiment treats a checkpoint with zero rows the same as no checkpoint", {
+  tmp_csv <- withr::local_tempfile(fileext = ".csv")
+  readr::write_csv(dubois_test_stops(n = 5), tmp_csv)
+  fixture_datasheet <- testthat::test_path("fixtures", "datasheet_example.json")
+  checkpoint <- withr::local_tempfile(fileext = ".rds")
+  saveRDS(tibble::tibble(), checkpoint) # empty results, e.g. from a run that crashed immediately
+
+  call_count <- 0
+  mock_call <- function(system, user, schema, model, api_key = "fake") {
+    call_count <<- call_count + 1
+    list(
+      q_bool = list(answer = "TRUE", confidence = 50),
+      q_enum = list(answer = "a", confidence = 50),
+      q_numeric = list(answer = 10, confidence = 50)
+    )
+  }
+  testthat::local_mocked_bindings(call_anthropic = mock_call)
+
+  result <- run_grounding_experiment(
+    tmp_csv, fixture_datasheet,
+    providers = "anthropic", models = list(anthropic = "test-model"),
+    questions = test_questions, checkpoint_path = checkpoint
+  )
+  expect_equal(call_count, 2) # naive + grounded, nothing skipped
+  expect_equal(nrow(result$results), 6)
+})
+
+test_that("run_grounding_experiment's restart = TRUE ignores an existing checkpoint", {
+  tmp_csv <- withr::local_tempfile(fileext = ".csv")
+  readr::write_csv(dubois_test_stops(n = 5), tmp_csv)
+  fixture_datasheet <- testthat::test_path("fixtures", "datasheet_example.json")
+  checkpoint <- withr::local_tempfile(fileext = ".rds")
+
+  call_count <- 0
+  mock_call <- function(system, user, schema, model, api_key = "fake") {
+    call_count <<- call_count + 1
+    list(
+      q_bool = list(answer = "TRUE", confidence = 50),
+      q_enum = list(answer = "a", confidence = 50),
+      q_numeric = list(answer = 10, confidence = 50)
+    )
+  }
+  testthat::local_mocked_bindings(call_anthropic = mock_call)
+
+  run_grounding_experiment(
+    tmp_csv, fixture_datasheet,
+    providers = "anthropic", models = list(anthropic = "test-model"),
+    questions = test_questions, checkpoint_path = checkpoint
+  )
+  expect_equal(call_count, 2)
+
+  run_grounding_experiment(
+    tmp_csv, fixture_datasheet,
+    providers = "anthropic", models = list(anthropic = "test-model"),
+    questions = test_questions, checkpoint_path = checkpoint, restart = TRUE
+  )
+  expect_equal(call_count, 4) # restart = TRUE re-called both, ignoring the full checkpoint
 })
 
 test_that("summarize_grounding_trials collapses repeats into a modal answer, accuracy, agreement, and mean confidence", {

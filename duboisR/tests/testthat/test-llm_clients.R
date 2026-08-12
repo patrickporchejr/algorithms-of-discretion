@@ -49,6 +49,57 @@ test_that("gemini_response_schema uppercases nested types and drops additionalPr
   expect_equal(unlist(gschema$required), c("q1", "q2", "q3"))
 })
 
+test_that("api_error_body extracts a nested {error: {message}} shape", {
+  resp <- structure(list(), class = "httr2_response")
+  testthat::local_mocked_bindings(
+    resp_body_json = function(resp, ...) list(error = list(message = "bad request: missing field")),
+    .package = "httr2"
+  )
+  expect_equal(api_error_body(resp), "bad request: missing field")
+})
+
+test_that("api_error_body extracts a bare {error: \"message\"} shape without crashing", {
+  # Regression test: some providers (observed from xAI/Grok) return `error`
+  # as a plain string rather than a nested object. `info$error$message` on
+  # that shape used to hard-error with "$ operator is invalid for atomic
+  # vectors" instead of returning the message -- see llm_clients.R.
+  resp <- structure(list(), class = "httr2_response")
+  testthat::local_mocked_bindings(
+    resp_body_json = function(resp, ...) list(error = "rate limit exceeded"),
+    .package = "httr2"
+  )
+  expect_equal(api_error_body(resp), "rate limit exceeded")
+})
+
+test_that("api_error_body falls back to a top-level {message} field", {
+  resp <- structure(list(), class = "httr2_response")
+  testthat::local_mocked_bindings(
+    resp_body_json = function(resp, ...) list(message = "top-level message, no error field"),
+    .package = "httr2"
+  )
+  expect_equal(api_error_body(resp), "top-level message, no error field")
+})
+
+test_that("api_error_body falls back to the raw body string when the JSON body isn't an object", {
+  resp <- structure(list(), class = "httr2_response")
+  testthat::local_mocked_bindings(
+    resp_body_json = function(resp, ...) "just a bare JSON string, not an object",
+    resp_body_string = function(resp, ...) "just a bare JSON string, not an object",
+    .package = "httr2"
+  )
+  expect_equal(api_error_body(resp), "just a bare JSON string, not an object")
+})
+
+test_that("api_error_body falls back to the raw body string when the body isn't valid JSON at all", {
+  resp <- structure(list(), class = "httr2_response")
+  testthat::local_mocked_bindings(
+    resp_body_json = function(resp, ...) stop("not valid JSON"),
+    resp_body_string = function(resp, ...) "<html>502 Bad Gateway</html>",
+    .package = "httr2"
+  )
+  expect_equal(api_error_body(resp), "<html>502 Bad Gateway</html>")
+})
+
 test_that("require_api_key aborts with a clear message when the env var is unset", {
   withr::local_envvar(c(TESTKEY_NOT_SET = ""))
   expect_error(require_api_key("TESTKEY_NOT_SET"), "TESTKEY_NOT_SET is not set")
