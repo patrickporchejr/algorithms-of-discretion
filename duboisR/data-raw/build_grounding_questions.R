@@ -223,8 +223,8 @@ grounding_questions_list <- list(
   code_has_explicit_license = list(
     type = "boolean",
     prompt = "This project's own code currently carries an explicit software license file.",
-    expected_answer = "FALSE",
-    rationale = "Datasheet's Distribution section: 'This project's own code does not yet carry an explicit license file -- add one before any public redistribution beyond the demo.'"
+    expected_answer = "TRUE",
+    rationale = "MIT-licensed: a root LICENSE file, and duboisR/DESCRIPTION declares 'License: MIT + file LICENSE' with its own duboisR/LICENSE."
   ),
   dataset_actively_distributed = list(
     type = "boolean",

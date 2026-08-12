@@ -11,16 +11,8 @@
 #
 # Run from the repo root: Rscript duboisR/inst/scripts/run_grounding_experiment.R
 
-if (requireNamespace("duboisR", quietly = TRUE)) {
-  library(duboisR)
-} else if (requireNamespace("devtools", quietly = TRUE)) {
-  devtools::load_all("duboisR", quiet = TRUE)
-} else {
-  stop(
-    "duboisR is not installed and devtools is unavailable to load it from ",
-    "source. Run: Rscript -e 'install.packages(\"devtools\"); devtools::install(\"duboisR\")'"
-  )
-}
+source("duboisR/inst/scripts/_load_duboisR.R")
+load_duboisR_or_die("duboisR")
 
 # Unlike the Python pipeline (which calls load_dotenv() explicitly), plain
 # Rscript never reads a .env file on its own -- Sys.getenv() only sees
@@ -87,6 +79,16 @@ if (nzchar(Sys.getenv("XAI_API_KEY"))) {
   MODELS$grok <- "grok-4.6"
 }
 
+# Pricing snapshot, not current guidance -- provider $/1M-token pricing
+# moves faster than this file does. Measured against this project's real
+# dataset/datasheet as of 2026-08-12: a naive-condition call is ~7.6K input /
+# ~0.7K output tokens, grounded is ~10.1K input / ~1.1K output (grounded
+# costs more mainly because datasheet.json itself is embedded in the
+# prompt). At N_REPEATS = 2 that's 4 calls/provider (2 conditions x 2
+# trials); all 4 providers together, at that snapshot's list pricing, ran
+# about $0.55 total ($0.27 of that on Anthropic alone -- the priciest of the
+# four at the time). Check each provider's current pricing page (linked in
+# .env.example) and multiply by the token counts above for today's number.
 if (length(PROVIDERS) == 0) {
   stop(
     "None of ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / XAI_API_KEY ",

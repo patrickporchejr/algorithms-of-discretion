@@ -11,16 +11,8 @@
 # Run from the repo root: Rscript duboisR/inst/scripts/seed_demo_datasheet.R
 # Pass --overwrite to force these answers over existing ones instead.
 
-if (requireNamespace("duboisR", quietly = TRUE)) {
-  library(duboisR)
-} else if (requireNamespace("devtools", quietly = TRUE)) {
-  devtools::load_all("duboisR", quiet = TRUE)
-} else {
-  stop(
-    "duboisR is not installed and devtools is unavailable to load it from ",
-    "source. Run: Rscript -e 'install.packages(\"devtools\"); devtools::install(\"duboisR\")'"
-  )
-}
+source("duboisR/inst/scripts/_load_duboisR.R")
+load_duboisR_or_die("duboisR")
 
 OUTPUT_PATH <- "data/processed/datasheet.json"
 OVERWRITE_EXISTING <- "--overwrite" %in% commandArgs(trailingOnly = TRUE)
@@ -176,8 +168,8 @@ answers <- list(
       "Stanford Open Policing Project data: released for research use",
       "(see openpolicing.stanford.edu for current terms). U.S. Census",
       "Bureau ACS estimates: U.S. government public-domain data. This",
-      "project's own code does not yet carry an explicit license file --",
-      "add one before any public redistribution beyond the demo."
+      "project's own code is MIT-licensed (root LICENSE; duboisR/ also",
+      "carries its own copy via DESCRIPTION's License field)."
     )
   ),
   maintenance = list(

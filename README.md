@@ -150,26 +150,16 @@ make grounding   # -> results/grounding_experiment.rds
 If none are set, that dashboard tab just shows a message pointing here
 instead of erroring — everything else in the app works without it.
 
-**Approximate cost per `make grounding` run** (all 4 providers, 2 trials
-each, list pricing as of 2026-08-12 — check each provider's current pricing
-page, since it moves fast). Measured against the real dataset/datasheet: a
-naive-condition call is ~7.6K input / ~0.7K output tokens, grounded is
-~10.1K input / ~1.1K output (grounded costs more mainly because
-`datasheet.json` itself is embedded in the prompt). At `N_REPEATS = 2`, one
-provider makes 4 calls total (2 conditions × 2 trials):
-
-| Provider | Model | $/1M in | $/1M out | Cost per provider run |
-|---|---|---|---|---|
-| Anthropic | `claude-opus-5` | $5.00 | $25.00 | ~$0.27 |
-| OpenAI | `gpt-5.1` | $1.25 | $10.00 | ~$0.08 |
-| Gemini | `gemini-3.1-pro-preview` | $2.00 | $12.00 | ~$0.11 |
-| xAI | `grok-4.6` | $2.00 | $6.00 | ~$0.09 |
-| **All 4 providers** | | | | **~$0.55** |
-
-With only `ANTHROPIC_API_KEY` set (the cheapest way to try it), a run costs
-about $0.27. Set `N_REPEATS <- 1` in
-`duboisR/inst/scripts/run_grounding_experiment.R` to roughly halve every
-figure above, at the cost of losing the stability/majority-vote signal.
+**Approximate cost per `make grounding` run.** At `N_REPEATS = 2`, one
+provider makes 4 calls total (2 conditions × 2 trials) — 16 calls if all 4
+providers are set. Dollar cost depends on each provider's current per-token
+pricing, which moves too fast to keep accurate in this file; see the dated
+snapshot (measured token counts plus a one-time pricing estimate) in a
+comment near the top of
+`duboisR/inst/scripts/run_grounding_experiment.R`, and each provider's own
+current pricing page (linked in `.env.example`) for today's number. Set
+`N_REPEATS <- 1` in that same script to roughly halve the token spend, at
+the cost of losing the stability/majority-vote signal.
 
 `make clean` removes every generated file (`data/raw/census_stratifiers.csv`,
 `data/processed/*.csv`, `results/`) so you can rebuild from scratch; it does

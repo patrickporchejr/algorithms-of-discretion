@@ -17,16 +17,8 @@ if (capabilities("cairo")) options(bitmapType = "cairo")
 # duboisR: the Wells-Du Bois Protocol diagnostic engine. Dev-mode loads the
 # sibling package source directly (no install step required); falls back to
 # an installed copy if present (e.g. after `devtools::install("duboisR")`).
-if (requireNamespace("duboisR", quietly = TRUE)) {
-  library(duboisR)
-} else if (requireNamespace("devtools", quietly = TRUE)) {
-  devtools::load_all("../duboisR", quiet = TRUE)
-} else {
-  stop(
-    "duboisR is not installed and devtools is unavailable to load it from ",
-    "source. Run: Rscript -e 'install.packages(\"devtools\"); devtools::install(\"duboisR\")'"
-  )
-}
+source("../duboisR/inst/scripts/_load_duboisR.R")
+load_duboisR_or_die("../duboisR")
 
 library(shiny)
 library(bslib)

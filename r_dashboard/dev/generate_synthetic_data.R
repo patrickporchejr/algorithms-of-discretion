@@ -16,16 +16,9 @@
 file_arg <- sub("--file=", "", grep("--file=", commandArgs(trailingOnly = FALSE), value = TRUE))
 script_dir <- dirname(normalizePath(file_arg))
 
-if (requireNamespace("duboisR", quietly = TRUE)) {
-  library(duboisR)
-} else if (requireNamespace("devtools", quietly = TRUE)) {
-  devtools::load_all(file.path(script_dir, "..", "..", "duboisR"), quiet = TRUE)
-} else {
-  stop(
-    "duboisR is not installed and devtools is unavailable to load it from ",
-    "source. Run: Rscript -e 'install.packages(\"devtools\"); devtools::install(\"duboisR\")'"
-  )
-}
+duboisR_pkg_path <- file.path(script_dir, "..", "..", "duboisR")
+source(file.path(duboisR_pkg_path, "inst", "scripts", "_load_duboisR.R"))
+load_duboisR_or_die(duboisR_pkg_path)
 
 df <- simulate_stops(n = 2000, seed = 42)
 

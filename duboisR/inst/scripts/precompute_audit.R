@@ -7,16 +7,8 @@
 #
 # Run from the repo root: Rscript duboisR/inst/scripts/precompute_audit.R
 
-if (requireNamespace("duboisR", quietly = TRUE)) {
-  library(duboisR)
-} else if (requireNamespace("devtools", quietly = TRUE)) {
-  devtools::load_all("duboisR", quiet = TRUE)
-} else {
-  stop(
-    "duboisR is not installed and devtools is unavailable to load it from ",
-    "source. Run: Rscript -e 'install.packages(\"devtools\"); devtools::install(\"duboisR\")'"
-  )
-}
+source("duboisR/inst/scripts/_load_duboisR.R")
+load_duboisR_or_die("duboisR")
 
 DATA_PATH <- "data/processed/audit_ready_stops.csv"
 RESULTS_DIR <- "results"
