@@ -49,3 +49,25 @@ test_that("veil_of_darkness_test's caveats always include the nonreporting and h
   expect_true(any(grepl("reporting rates", res$caveats)))
   expect_true(any(grepl("hour only", res$caveats)))
 })
+
+test_that("fit_veil_of_darkness layers extra control terms onto the base formula", {
+  d <- dubois_test_stops(2000)
+  set.seed(3)
+  d$county_fips <- sample(c("48201", "48113", "48453"), nrow(d), replace = TRUE)
+  d <- dubois_relevel(d, "subject_race", ref = "white")
+  prepared <- suppressWarnings(prepare_veil_of_darkness_data(d))
+
+  control_map <- list(demographics = "subject_sex", poverty = "poverty_rate")
+
+  bare <- fit_veil_of_darkness(prepared, interaction = TRUE)
+  expect_false("subject_sexmale" %in% bare$model_fit$summary$term)
+
+  with_controls <- fit_veil_of_darkness(
+    prepared, interaction = TRUE,
+    control_map = control_map, controls_selected = c("demographics", "poverty")
+  )
+  expect_true("subject_sexmale" %in% with_controls$model_fit$summary$term)
+  expect_true("poverty_rate" %in% with_controls$model_fit$summary$term)
+  # unselected map entries are dropped, same as build_formula()
+  expect_false("median_income" %in% with_controls$model_fit$summary$term)
+})

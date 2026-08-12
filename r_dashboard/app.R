@@ -54,16 +54,15 @@ ui <- page_sidebar(
         "Contraband Found" = "contraband_found"
       )
     ),
-    # checkboxGroupInput(
-    #   "controls", "Layer Intersectional Controls:",
-    #   choices = c(
-    #     "Driver Sex" = "demographics",
-    #     "County Poverty Rate" = "poverty",
-    #     "County Median Income" = "income",
-    #     "Time of Day" = "time"
-    #   ),
-    #   selected = c("demographics")
-    # ),
+    checkboxGroupInput(
+      "controls", "Layer Intersectional Controls:",
+      choices = c(
+        "Driver Sex" = "demographics",
+        "County Poverty Rate" = "poverty",
+        "County Median Income" = "income",
+        "Time of Day" = "time"
+      )
+    ),
     helpText(
       "Each layer tests how much raw racial disparity persists after ",
       "accounting for a structural covariate. See the README for what ",
@@ -84,11 +83,8 @@ ui <- page_sidebar(
 )
 
 server <- function(input, output, session) {
-  # Not used by any currently-wired tab -- both Regression and Veil of
-  # Darkness now read precomputed results/*.rds instead. Kept here (lazily;
-  # reactive() doesn't run until called) for the Data Transparency &
-  # Provenance tab, which will need live composition/missingness numbers
-  # over the raw data rather than a cached model fit.
+  # Loaded lazily -- only actually read when a live fit is needed (see
+  # audit_fit() below) or by the future Data Transparency & Provenance tab.
   stops_data <- reactive({
     validate(need(file.exists(DATA_PATH), "No processed dataset yet — run `make all` first."))
     d <- readr::read_csv(DATA_PATH, show_col_types = FALSE)
@@ -97,23 +93,37 @@ server <- function(input, output, session) {
     duboisR::dubois_relevel(d, "subject_race", ref = "white")
   })
 
-  # Reads results/regression_<outcome>.rds (see
-  # duboisR/inst/scripts/precompute_audit.R) rather than fitting live.
-  # Currently only varies by outcome_var -- the intersectional-controls
-  # checkboxes are still off, and the cache only has the no-controls fit per
-  # outcome. Wiring those controls back on will need either precomputing
-  # the specific combinations worth showing, or falling back to a live fit
-  # for combinations that aren't cached.
+  # results/regression_<outcome>.rds (see
+  # duboisR/inst/scripts/precompute_audit.R) only covers the no-controls
+  # fit per outcome -- precomputing all 16 possible control combinations
+  # wasn't worth it when a live glm() fit against the full 5.6M-row dataset
+  # only takes ~9s. So: no controls selected hits the instant cached path;
+  # any control selected falls back to fitting live, same as before caching
+  # existed. Both branches return the same shape (list(fit=, predicted_probabilities=))
+  # so the modules downstream don't need to know which path served them.
   audit_fit <- reactive({
-    path <- file.path(RESULTS_DIR, paste0("regression_", input$outcome_var, ".rds"))
-    validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
-    readRDS(path)
+    if (length(input$controls) == 0) {
+      path <- file.path(RESULTS_DIR, paste0("regression_", input$outcome_var, ".rds"))
+      validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
+      return(readRDS(path))
+    }
+
+    control_map <- list(
+      demographics = "subject_sex",
+      poverty = "poverty_rate",
+      income = "median_income",
+      time = "factor(hour)"
+    )
+    formula <- duboisR::build_formula(input$outcome_var, "subject_race", control_map, input$controls)
+    fit <- duboisR::fit_audit_glm(stops_data(), formula)
+    list(fit = fit, predicted_probabilities = duboisR::predicted_probabilities(fit, stops_data(), "subject_race"))
   })
 
   regression_module_server("regression", audit_fit = audit_fit)
   veil_module_server(
     "veil",
     outcome_var = reactive(input$outcome_var),
+    controls_selected = reactive(input$controls),
     results_dir = RESULTS_DIR
   )
   # threshold_module_server("threshold", stops_data = stops_data)

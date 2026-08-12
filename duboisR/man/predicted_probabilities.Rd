@@ -24,9 +24,10 @@ Complements the reference-category odds ratios in \code{fit$summary} (each
 relative to a baseline level, e.g. "white") with an absolute view: for
 every level of \code{group_var}, the model's predicted probability of the
 outcome, holding every other predictor at a reference value (mean for
-numeric predictors, the most common observed value for categorical
-ones). Unlike odds ratios, this shows every level of \code{group_var}
-directly, including whichever level the model treats as the reference.
+numeric predictors, the most common observed value for categorical ones
+-- see the \code{factor()}-wrapped exception below). Unlike odds ratios, this
+shows every level of \code{group_var} directly, including whichever level the
+model treats as the reference.
 }
 \details{
 Predictions are built from \code{data} (not \code{model.frame(fit$model)}) and
@@ -34,4 +35,11 @@ scored via \code{predict(newdata = ...)} so that formula terms computed from
 a raw column (e.g. \code{factor(hour)}) are re-derived correctly -- passing
 the model frame's own \code{factor(hour)} column back in as \code{newdata} would
 not match the original formula's term.
+
+A predictor referenced through a \code{factor(...)} term (e.g. \code{factor(hour)}
+on an integer \code{hour} column) always uses the mode, even though the raw
+column is numeric: the mean of a numeric column generally isn't one of
+the discrete levels the factor was fitted on (e.g. \code{mean(hour) == 11.7}),
+and \code{predict()} errors ("has new levels") if asked to score a level the
+factor never saw during fitting.
 }

@@ -7,7 +7,9 @@
 fit_veil_of_darkness(
   prepared,
   outcome_var = "search_conducted",
-  interaction = FALSE
+  interaction = FALSE,
+  control_map = list(),
+  controls_selected = character(0)
 )
 }
 \arguments{
@@ -18,6 +20,14 @@ fit_veil_of_darkness(
 
 \item{interaction}{If \code{TRUE}, include a \code{race:is_dark} interaction term.
 Default \code{FALSE}.}
+
+\item{control_map, controls_selected}{Passed to \code{\link[=build_formula]{build_formula()}} to layer
+additional covariates (e.g. \code{subject_sex}, \code{poverty_rate}) onto the
+race/is_dark/hour terms this function always includes -- the same
+robustness-check pattern as the plain regression tab. Don't pass an
+\code{hour}/\code{factor(hour)} term here: it's already included whenever the
+intertwilight restriction leaves more than one distinct hour (see
+below), so adding it again would duplicate the term.}
 }
 \value{
 A list of class \code{duboisR_vod_result} with \code{model_fit} (a

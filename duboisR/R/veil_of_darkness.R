@@ -162,12 +162,20 @@ prepare_veil_of_darkness_data <- function(data, date_col = "date", hour_col = "h
 #' @param outcome_var String outcome column. Default `"search_conducted"`.
 #' @param interaction If `TRUE`, include a `race:is_dark` interaction term.
 #'   Default `FALSE`.
+#' @param control_map,controls_selected Passed to [build_formula()] to layer
+#'   additional covariates (e.g. `subject_sex`, `poverty_rate`) onto the
+#'   race/is_dark/hour terms this function always includes -- the same
+#'   robustness-check pattern as the plain regression tab. Don't pass an
+#'   `hour`/`factor(hour)` term here: it's already included whenever the
+#'   intertwilight restriction leaves more than one distinct hour (see
+#'   below), so adding it again would duplicate the term.
 #' @return A list of class `duboisR_vod_result` with `model_fit` (a
 #'   `duboisR_glm_fit`), `diagnostics` (row counts / hours used), and
 #'   `caveats` (character vector, always including the nonreporting-
 #'   robustness assumption and the hour-only time-resolution limitation).
 #' @export
-fit_veil_of_darkness <- function(prepared, outcome_var = "search_conducted", interaction = FALSE) {
+fit_veil_of_darkness <- function(prepared, outcome_var = "search_conducted", interaction = FALSE,
+                                  control_map = list(), controls_selected = character(0)) {
   base_term <- if (interaction) {
     paste0(prepared$race_col, " * is_dark")
   } else {
@@ -176,12 +184,10 @@ fit_veil_of_darkness <- function(prepared, outcome_var = "search_conducted", int
   # A `factor(hour)` term with only one surviving level breaks model.matrix()'s
   # contrasts (needs >= 2 levels), so only include it when the intertwilight
   # restriction has left more than one distinct hour to control for.
-  rhs <- if (length(prepared$intertwilight_hours) > 1) {
-    paste(base_term, "+ factor(", prepared$hour_col, ")")
-  } else {
-    base_term
+  if (length(prepared$intertwilight_hours) > 1) {
+    base_term <- paste(base_term, "+ factor(", prepared$hour_col, ")")
   }
-  formula <- stats::as.formula(paste(outcome_var, "~", rhs))
+  formula <- build_formula(outcome_var, base_term, control_map, controls_selected)
   model_fit <- fit_audit_glm(prepared$fit_data, formula)
 
   diagnostics <- list(

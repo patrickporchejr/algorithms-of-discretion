@@ -16,12 +16,31 @@
 # cannot show whether darkness changes the racial disparity -- i.e. it
 # cannot test the actual hypothesis this tab is named after.
 #
-# This module reads a precomputed results/veil_*.rds artifact (see
+# This module reads precomputed results/veil_*.rds artifacts (see
 # duboisR/inst/scripts/precompute_audit.R) rather than fitting live --
 # prepare_veil_of_darkness_data() takes ~2min over the full dataset (the
 # daylight/dark classification, not the fit itself), and the dataset is a
-# frozen pull, so there's no reason to pay that per session. Only which
-# outcome's cached artifact to load reacts to outcome_var.
+# frozen pull, so there's no reason to pay that per session.
+#
+# The sidebar's intersectional-controls checkboxes DO reach this tab (same
+# as the Regression tab), with the same cache-vs-live-fallback split: no
+# extra controls selected hits the fully-cached veil_<outcome>.rds (instant).
+# Any control selected reads the cached veil_prepared.rds -- the *already
+# daylight-classified* data, skipping the ~2min step -- and calls
+# fit_veil_of_darkness() live, which is cheap (a few seconds), same as the
+# Regression tab's live fallback.
+#
+# "Time of Day" is deliberately excluded from this tab's control_map: the
+# fit already includes factor(hour) unconditionally whenever the
+# intertwilight restriction leaves more than one distinct hour (structurally
+# required for the test's own design, not an optional covariate), so
+# checking it here would just duplicate a term already in the model.
+
+VEIL_CONTROL_MAP <- list(
+  demographics = "subject_sex",
+  poverty = "poverty_rate",
+  income = "median_income"
+)
 
 veil_module_ui <- function(id) {
   ns <- NS(id)
@@ -32,12 +51,29 @@ veil_module_ui <- function(id) {
   )
 }
 
-veil_module_server <- function(id, outcome_var, results_dir) {
+veil_module_server <- function(id, outcome_var, controls_selected, results_dir) {
   moduleServer(id, function(input, output, session) {
+    applicable_controls <- reactive({
+      intersect(controls_selected(), names(VEIL_CONTROL_MAP))
+    })
+
     vod_fit <- reactive({
-      path <- file.path(results_dir, paste0("veil_", outcome_var(), ".rds"))
-      validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
-      readRDS(path)
+      if (length(applicable_controls()) == 0) {
+        path <- file.path(results_dir, paste0("veil_", outcome_var(), ".rds"))
+        validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
+        return(readRDS(path))
+      }
+
+      prepared_path <- file.path(results_dir, "veil_prepared.rds")
+      validate(need(file.exists(prepared_path), paste0("No cached result at ", prepared_path, " -- run `make results` first.")))
+      prepared <- readRDS(prepared_path)
+      duboisR::fit_veil_of_darkness(
+        prepared,
+        outcome_var = outcome_var(),
+        interaction = TRUE,
+        control_map = VEIL_CONTROL_MAP,
+        controls_selected = applicable_controls()
+      )
     })
 
     output$vod_plot <- renderPlot({
@@ -60,7 +96,14 @@ veil_module_server <- function(id, outcome_var, results_dir) {
           format(d$n_dropped_twilight, big.mark = ","), " stops in civil twilight and ",
           format(d$n_dropped_no_centroid, big.mark = ","), " stops with no county centroid match."
         ),
-        tags$ul(lapply(vod_fit()$caveats, tags$li))
+        tags$ul(lapply(vod_fit()$caveats, tags$li)),
+        if ("time" %in% controls_selected()) {
+          p(em(
+            "\"Time of Day\" has no effect on this tab: this test already ",
+            "controls for clock hour unconditionally (factor(hour) above), ",
+            "so there's nothing extra for that checkbox to add here."
+          ))
+        }
       )
     })
   })

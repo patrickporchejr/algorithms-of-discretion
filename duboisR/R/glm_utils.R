@@ -99,15 +99,23 @@ fit_audit_glm <- function(data, formula, family = "binomial", conf_level = 0.95,
 #' relative to a baseline level, e.g. "white") with an absolute view: for
 #' every level of `group_var`, the model's predicted probability of the
 #' outcome, holding every other predictor at a reference value (mean for
-#' numeric predictors, the most common observed value for categorical
-#' ones). Unlike odds ratios, this shows every level of `group_var`
-#' directly, including whichever level the model treats as the reference.
+#' numeric predictors, the most common observed value for categorical ones
+#' -- see the `factor()`-wrapped exception below). Unlike odds ratios, this
+#' shows every level of `group_var` directly, including whichever level the
+#' model treats as the reference.
 #'
 #' Predictions are built from `data` (not `model.frame(fit$model)`) and
 #' scored via `predict(newdata = ...)` so that formula terms computed from
 #' a raw column (e.g. `factor(hour)`) are re-derived correctly -- passing
 #' the model frame's own `factor(hour)` column back in as `newdata` would
 #' not match the original formula's term.
+#'
+#' A predictor referenced through a `factor(...)` term (e.g. `factor(hour)`
+#' on an integer `hour` column) always uses the mode, even though the raw
+#' column is numeric: the mean of a numeric column generally isn't one of
+#' the discrete levels the factor was fitted on (e.g. `mean(hour) == 11.7`),
+#' and `predict()` errors ("has new levels") if asked to score a level the
+#' factor never saw during fitting.
 #'
 #' @param fit A `duboisR_glm_fit` (from [fit_audit_glm()]).
 #' @param data The data frame `fit` was fitted on.
@@ -122,15 +130,20 @@ predicted_probabilities <- function(fit, data, group_var, conf_level = 0.95) {
 
   predictor_vars <- all.vars(stats::formula(model))[-1]
   other_vars <- setdiff(predictor_vars, group_var)
+  factor_wrapped <- attr(stats::terms(model), "term.labels")
+  is_factor_wrapped <- function(var) any(grepl(sprintf("^factor\\(\\s*%s\\s*\\)$", var), factor_wrapped))
 
-  ref_row <- lapply(data[other_vars], function(col) {
-    if (is.numeric(col)) {
+  ref_row <- lapply(other_vars, function(var) {
+    col <- data[[var]]
+    if (is.numeric(col) && !is_factor_wrapped(var)) {
       mean(col, na.rm = TRUE)
     } else {
       tab <- table(col)
-      names(tab)[which.max(tab)]
+      mode_val <- names(tab)[which.max(tab)]
+      if (is.numeric(col)) as.numeric(mode_val) else mode_val
     }
   })
+  names(ref_row) <- other_vars
 
   levels_group <- levels(factor(data[[group_var]]))
   newdata <- as.data.frame(ref_row, stringsAsFactors = FALSE)[rep(1, length(levels_group)), , drop = FALSE]

@@ -55,6 +55,11 @@ for (outcome in OUTCOMES) {
 
 cat("Preparing Veil of Darkness data (slow -- daylight/dark classification over the full dataset)...\n")
 vod_prepared <- prepare_veil_of_darkness_data(stops_data)
+# Cached separately from the outcome fits below so the dashboard's
+# intersectional-controls checkboxes can refit live (a few seconds) against
+# an already-classified dataset, instead of repeating this ~2min pass, when
+# a control combination beyond the plain no-controls fit is selected.
+saveRDS(vod_prepared, file.path(RESULTS_DIR, "veil_prepared.rds"))
 
 for (outcome in OUTCOMES) {
   cat("Fitting Veil of Darkness:", outcome, "...\n")

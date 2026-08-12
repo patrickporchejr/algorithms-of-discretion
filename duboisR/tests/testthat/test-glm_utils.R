@@ -91,3 +91,27 @@ test_that("predicted_probabilities matches a hand-computed probability at the me
   expect_equal(unname(out$probability[out$level == "white"]), unname(expected_white), tolerance = 1e-8)
   expect_equal(unname(out$probability[out$level == "black"]), unname(expected_black), tolerance = 1e-8)
 })
+
+test_that("predicted_probabilities uses the mode, not the mean, for a factor()-wrapped numeric control", {
+  set.seed(4)
+  n <- 500
+  d <- data.frame(
+    subject_race = sample(c("white", "black"), n, replace = TRUE),
+    hour = sample(0:23, n, replace = TRUE)
+  )
+  d$search_conducted <- rbinom(n, 1, plogis(-2 + 0.5 * (d$subject_race == "black")))
+  d <- dubois_relevel(d, "subject_race", ref = "white")
+
+  fit <- fit_audit_glm(d, search_conducted ~ subject_race + factor(hour))
+  # mean(hour) is a non-integer (e.g. 11.7) that factor(hour) never saw during
+  # fitting -- predict() used to hard-error with "has new levels" here.
+  out <- expect_no_error(predicted_probabilities(fit, d, "subject_race"))
+
+  mode_hour <- as.integer(names(sort(table(d$hour), decreasing = TRUE))[1])
+  coefs <- stats::coef(fit$model)
+  hour_term <- paste0("factor(hour)", mode_hour)
+  hour_coef <- if (hour_term %in% names(coefs)) coefs[[hour_term]] else 0
+  expected_white <- plogis(coefs[["(Intercept)"]] + hour_coef)
+
+  expect_equal(unname(out$probability[out$level == "white"]), unname(expected_white), tolerance = 1e-8)
+})
