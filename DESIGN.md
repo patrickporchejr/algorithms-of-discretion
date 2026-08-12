@@ -1,574 +1,798 @@
-# Design Doc: Algorithms of Discretion
+# Design Doc: Algorithms of Discretion / `duboisR`
 
-This document is a technical deep dive into how this repository is built —
-the architecture, the modules, and *why* specific decisions were made. It
-complements the [README](README.md), which covers the project's
-methodological framing and setup instructions. This doc assumes you've read
-the README and want to understand the machinery underneath.
+This document is the technical companion to the [README](README.md). The
+README tells you how to get the pipeline running and the dashboard open —
+exact commands, exact file paths, exact environment variables. This
+document assumes that worked and answers a different question: *how is
+this actually built, and why does each piece exist in the shape it does.*
 
-**Scope note:** the README describes the eventual product (a `duboisR`
-diagnostic package, a Veil of Darkness natural-experiment module, a
-multi-state Quarto white paper). As of this writing, the *implemented*
-system covers a three-stage Python ETL pipeline feeding a single-state
-(Texas) dataset into an R Shiny dashboard, plus a real, tested, installable
-`duboisR` R package (`duboisR/`) implementing the Wells-Du Bois Protocol's
-diagnostics — datasheet scaffolding, composition/proxy/tendentious-outcome
-auditing, a Veil of Darkness test, a fast Threshold Test approximation, and
-subpopulation disparity disaggregation. Still narrower than the full vision:
-single-state, no multi-state Quarto white paper yet, and the VoD/Threshold
-Test functions exist and are tested but aren't yet exposed as interactive
-Shiny control layers (see §5). This doc describes what's actually built,
-and flags where it diverges from or sets up for the broader vision.
+The center of gravity here is `duboisR`, an installable R package
+(`duboisR/`) that is the actual diagnostic engine of the project. The
+Python pipeline and the Shiny dashboard both exist to feed it data and
+display its output — neither does statistics on its own. If you only read
+one section, read §5.
 
 ---
 
-## 1. Why a polyglot architecture
-
-The repo is split into a Python half and an R half on purpose, not by
-accident of who wrote what:
-
-- **Python does ETL.** `pandas` + `requests` are the pragmatic choice for
-  chunked CSV processing and calling a REST API (Census). Nothing here needs
-  a statistical language — it's string cleaning, filtering, and joins.
-- **R does statistics and the UI.** `glm()`'s formula interface, `broom`-style
-  tidy output, and Shiny's reactive graph make R the more direct tool for
-  "let a researcher toggle covariates and watch a regression refit
-  live." Rebuilding a reactive logistic-regression UI in Python (e.g. Dash)
-  would mean giving up R's terser statistical modeling syntax for no benefit.
-
-The two halves communicate through **one file on disk**:
-`data/processed/audit_ready_stops.csv`. There is no API, no shared process,
-no serialization format smarter than CSV. This is a deliberate low-tech
-boundary — the R side has no dependency on how the Python side is
-implemented, only on a column contract (see §4). The tradeoff is that nothing
-enforces that contract except human discipline and the `validate(need(...))`
-guard in `mod_regression.R` (see §6).
+## 1. System architecture at a glance
 
 ```
 Stanford Open Policing (raw CSV, .zip)  ──┐
                                            ├─▶ 02_clean_stops.py ──▶ stops_clean.csv ──┐
-Census ACS 5-Year API             ──▶ 01_fetch_census.py ──▶ census_stratifiers.csv ──┴─▶ 03_merge_features.py ──▶ audit_ready_stops.csv ──▶ Shiny app (app.R)
+Census ACS 5-Year API ──▶ 01_fetch_census.py ──▶ census_stratifiers.csv ──┴─▶ 03_merge_features.py
+                                                                                    │
+                                                                                    ▼
+                                                                    data/processed/audit_ready_stops.csv
+                                                                                    │
+                                                              duboisR/inst/scripts/precompute_audit.R
+                                                                    (calls into the duboisR package)
+                                                                                    │
+                                                                                    ▼
+                                                                          results/*.rds (cached fits)
+                                                                                    │
+                                                                                    ▼
+                                                                    r_dashboard/app.R (Shiny, reads .rds)
 ```
 
----
-
-## 2. Data pipeline (`python/`)
-
-Three scripts, run in order, each reading the previous stage's output. They
-are plain scripts (not a DAG framework, not Airflow/Prefect) — appropriate
-at this scale: three steps, run manually, no scheduling or retries needed.
-
-### 2.1 `01_fetch_census.py` — pull county covariates
-
-Hits the ACS 5-Year API (`api.census.gov/data/2022/acs/acs5`) for Texas
-(state FIPS `48`), requesting three variables:
-
-| Census variable | Meaning |
-|---|---|
-| `B19013_001E` | Median household income |
-| `B17001_002E` | Population below poverty line |
-| `B17001_001E` | Poverty universe (denominator) |
-
-`poverty_rate` is derived (`poverty_count / poverty_universe`) rather than
-pulled as a pre-computed ACS variable, since ACS most often exposes counts,
-not precomputed rates, at this table.
-
-**Key decision — the join key.** The Census API returns `county_fips`
-naturally (state+county FIPS concatenation), but the Stanford stop data (see
-§2.2) only has a free-text `county_name` field, not FIPS. Rather than trying
-to resolve stop-level records to FIPS (which would need a separate
-name→FIPS crosswalk), this script instead normalizes *its own* county name
-into the same shape the stop data will produce: strip `" County"`, uppercase,
-trim (`"Harris County, Texas"` → `"HARRIS"`). Both sides of the eventual join
-in `03_merge_features.py` are derived the same way, so they're guaranteed to
-agree on formatting. `county_fips` is still carried through the pipeline
-end-to-end, but only as a passenger for downstream reference (e.g. mapping) —
-it is never used as a join key.
-
-Requires a free `CENSUS_API_KEY`, loaded via `python-dotenv` from a
-repo-root `.env` (gitignored).
-
-### 2.2 `02_clean_stops.py` — standardize and filter the raw stop file
-
-This is the heaviest-lifting script, both computationally and in terms of
-schema-reality decisions.
-
-**Chunked reads.** The raw Stanford "TX statewide" file is ~27.4M rows / 44
-columns, distributed as a ~1GB zip (~7.2GB unzipped). `pandas.read_csv` is
-called with `chunksize=500_000` directly against the `.zip` — pandas
-transparently decompresses, so there's no separate unzip step. Each chunk is
-independently filtered and concatenated at the end; nothing here needs
-cross-chunk state.
-
-**Column pruning at read time.** `usecols=RAW_COLUMNS_NEEDED` limits the read
-to 9 of the 44 raw columns (race, sex, county, search/contraband flags,
-violation, search basis, date, time). This is meaningfully faster than
-reading everything and dropping columns afterward, since pandas' C parser
-skips unrequested columns during parsing rather than materializing and
-discarding them.
-
-**Row filtering:**
-- `subject_race` restricted to `white`, `black`, `hispanic` — these are the
-  three groups with sufficient sample size for stable disparity estimates;
-  other categories are dropped rather than binned into "other."
-- Filtered to **2015–2017** out of the full 2006–2017 range. This is a
-  performance decision, not a methodological one: at ~5.6M rows the
-  dashboard's `glm()` refits in ~9 seconds when a control is toggled, which
-  is the threshold for the UI still feeling interactive. At the full
-  27.4M-row scale, an interactive Shiny `glm()` refit is not viable.
-
-**Derived columns:**
-- `hour` — extracted from a combined `date + time` timestamp parse, not from
-  `time` alone, since `pd.to_datetime` needs the date component to parse
-  reliably.
-- `county_join_key` — same normalization logic as §2.1, applied independently
-  here (there's no shared helper module between the two scripts — see §7 for
-  why that's a known rough edge, not an oversight).
-
-**Schema realities baked into the output** (discovered against the actual
-raw file, not assumed up front):
-- **No FIPS at the stop level** — only free-text `county_name`. This is why
-  the whole pipeline joins on normalized name instead of FIPS (§2.1).
-- **No arrest outcome.** `outcome` in the raw data is only ever `"warning"`
-  or `"citation"` — there's no arrest field to build a second target metric
-  from. `contraband_found` (search hit rate) is used as the dashboard's
-  second outcome instead, which also happens to match the README's originally
-  stated primary metrics.
-- **No `subject_age`.** Texas State Patrol doesn't report it. This directly
-  shrinks the "Individual Demographics" control layer in the dashboard down
-  to driver sex only — it's not a cleaning omission, the source data doesn't
-  have it.
-
-These three facts explain several shapes elsewhere in the codebase (the
-dashboard's control list, the `OUTPUT_COLUMNS` set, the absence of an
-`is_arrested` field) — see them as the root cause if those choices look
-arbitrary from a downstream file alone.
-
-`_validate_columns` runs a zero-row header read before the full chunked read,
-so a schema mismatch (e.g. Stanford renames a column upstream) fails fast
-with a clear message instead of a `KeyError` partway through a multi-minute
-chunked read.
-
-### 2.3 `03_merge_features.py` — join stops to county covariates
-
-An inner join between `stops_clean.csv` and `census_stratifiers.csv` on
-`county_join_key`. `how="inner"` means any stop whose normalized county name
-doesn't match a Texas county from the Census pull is silently dropped from
-the *merged* output — but not silently overall: the script computes the
-unmatched set (`~isin`) and prints a warning with the distinct unmatched
-county names (capped at 10) and a count. This is a deliberate
-observability tradeoff — inner join keeps the merge logic and the downstream
-`OUTPUT_COLUMNS` contract simple (no `NaN` covariates to handle in the
-regression), at the cost of needing this warning to catch silent data loss
-from a join-key mismatch (e.g. a misspelled or unincorporated-area county
-name that doesn't exist in Census data).
-
-Output: `audit_ready_stops.csv`, ~5.6M rows — the direct input to the Shiny
-app.
-
-### 2.4 Why not a shared library or DAG tool
-
-Each script recomputes its own `county_join_key` normalization and each
-declares its own `OUTPUT_COLUMNS`. There's no `pipeline/common.py`, no
-Makefile, no orchestrator — you run three scripts by hand, in order, per the
-README. At three stages with no branching, no scheduling, and no need for
-partial re-runs, that's the appropriately minimal amount of infrastructure.
-The duplicated join-key logic is a real seam (see §7), but factoring it out
-prematurely would be over-engineering for a pipeline this size.
+Three stages, one file-based contract between each: a CSV between Python
+and the precompute step, a directory of `.rds` files between the precompute
+step and the dashboard. There is no API, no message queue, no shared
+process. `duboisR` sits in the middle as a library, not a service — both
+the precompute script and the dashboard call it in-process
+(`devtools::load_all("duboisR")` or `library(duboisR)`).
 
 ---
 
-## 3. Statistical, diagnostic & dashboard architecture
+## 2. Language and package choices
 
-### 3.0 The `duboisR` package (`duboisR/`)
+**Python does ETL, nothing else.** `pandas` + `requests` for chunked CSV
+processing and a REST call to the Census API. No statistical modeling
+happens in `python/` — it's string cleaning, filtering, and one join. This
+is a deliberate boundary, not an accident of who wrote what: nothing in the
+ETL stage needs R's modeling tools, and nothing in the statistical stage
+needs Python's data-wrangling ergonomics.
 
-A real, installable R package (`DESCRIPTION`/`NAMESPACE`/roxygen2/testthat —
-not more flat scripts), built to implement the Wells-Du Bois Protocol's
-diagnostics. `r_dashboard/app.R` and `r_dashboard/dev/generate_synthetic_data.R`
-both load it in dev mode via `devtools::load_all("../duboisR")` (falling back
-to an installed copy if present), resolved relative to each script's own
-location rather than the shell's cwd, since the two scripts are documented
-to be invoked from different working directories (`app.R` from inside
-`r_dashboard/`, `generate_synthetic_data.R` from the repo root).
+**R does statistics, packaged as a real library, not scripts.** `duboisR`
+is a proper `DESCRIPTION`/`NAMESPACE`/roxygen2/testthat package — 30
+exported functions, 88 `test_that()` blocks, `devtools::check()` clean (0
+errors/warnings/notes). This matters for a reason beyond code hygiene: a
+diagnostic tool for auditing bias has to be independently verifiable. A
+tested, documented, `?help`-able package is falsifiable in a way a pile of
+analysis scripts in a notebook is not — every claim it makes about a
+dataset traces to a function with a docstring, a return type, and a test
+that pins its behavior against known inputs.
 
-**Shared statistical core (`R/glm_utils.R`).** `dubois_relevel()`,
-`build_formula()`, and `fit_audit_glm()` extract exactly the releveling /
-formula-construction / Wald-CI logic that used to live inline in
-`mod_regression.R` (see §3.2) into tested, reusable functions — the Wald-CI
-rationale (closed-form, not `broom::tidy(conf.int=TRUE)`'s profile-likelihood
-default, which hangs at millions of rows) is unchanged, just relocated.
-Every other diagnostic below that needs a fitted GLM (`check_proxies()`'s
-`glm` fallback, `veil_of_darkness_test()`, `subpopulation_disparities()`)
-builds on this same function rather than reimplementing it.
+**Why `glm()` over a Python equivalent.** R's formula interface
+(`search_conducted ~ subject_race + poverty_rate`) and Shiny's reactive
+graph are the more direct tool for "let a researcher toggle covariates and
+watch a regression refit." Rebuilding this in Python (Dash + statsmodels)
+would mean giving up R's terser modeling syntax for no offsetting benefit —
+nothing here needs Python's ML ecosystem; every model in this repo is a
+GLM, a Beta-distribution MLE fit via `optim()`, or a random forest used
+only as a diagnostic classifier, not a production predictor.
 
-**Datasheets for Datasets (`R/datasheet.R`, `R/datasheet_wizard.R`).**
-`use_datasheet()` scaffolds a static 7-section template (Motivation,
-Composition, Collection Process, Preprocessing, Uses, Distribution,
-Maintenance — Gebru et al. 2021) into the researcher's project;
-`build_datasheet_wizard()` is an interactive CLI walkthrough of the same
-question structure (single source of truth: both are generated from an
-internal `datasheet_questions` list built by
-`data-raw/build_datasheet_questions.R`) that writes incremental,
-resumable answers to `datasheet.json`. Neither automates the qualitative
-reflection itself — per the original Datasheets for Datasets paper, that
-would defeat the point.
+**Why Wald confidence intervals instead of `broom::tidy(conf.int = TRUE)`.**
+This choice recurs across almost every fitting function in `duboisR`
+(`fit_audit_glm()`, and everything built on it), so it's worth stating once
+here rather than in every docstring. `broom::tidy()`'s default CI is
+profile-likelihood, computed via `confint.glm()`, which iteratively refits
+the model to trace the log-likelihood's profile per coefficient. That's the
+statistically preferred method at textbook sample sizes, and it hangs at
+millions of rows — refitting a GLM against 5.6M rows once per coefficient
+is not viable interactively. The closed-form alternative,
 
-**Composition/proxy/tendentious diagnostics.** `audit_composition()`
-computes subpopulation representation and (optionally) subgroup-specific
-missingness rates — the numbers a researcher needs for the Composition
-section, without narrating them. `check_proxies()` (one function serving
-both source documents' identical "Identity Proxy" proposal) temporarily
-predicts a protected attribute from "neutral" covariates via `ranger`
-(if installed) or a dependency-free one-vs-rest `glm` fallback, flagging
-when "excluding" race from a model doesn't actually remove race information.
-`check_tendentious()` is a checklist tool prompting explicit classification
-of whether an outcome variable reflects an objective measurement or
-administrative/subjective human discretion.
+```r
+z <- stats::qnorm(1 - (1 - conf_level) / 2)
+df$conf.low  <- df$estimate - z * df$std.error
+df$conf.high <- df$estimate + z * df$std.error
+```
 
-**Veil of Darkness (`R/veil_of_darkness.R`).** `compute_daylight_status()`
-joins a bundled 254-row TX county centroid table
-(`inst/extdata/tx_county_centroids.csv`, sourced from the public-domain
-Census Gazetteer Files, joined on the `county_fips` column already carried
-through the Python pipeline) and calls `suncalc::getSunlightTimes()`
-**vectorized over unique `(date, county)` pairs**, not per-row — required
-for acceptable performance at millions of rows. Because the data contract
-only carries integer `hour` (no minutes), each stop's timestamp is assumed
-to be at the top of its hour — a real, documented resolution limitation, not
-a convenience shortcut. `veil_of_darkness_test()` restricts to the
-**intertwilight period** (clock hours that are sometimes daylight and
-sometimes dark across the data's date/county range — Grogger & Ridgeway
-2006) before fitting, and its result always carries the nonreporting-
-robustness assumption as an explicit caveat rather than a silent one.
+is `O(1)` relative to the fit — no refitting, just arithmetic on
+`summary(model)$coefficients` — and is asymptotically justified (MLE
+normality) well before millions of rows. This is the actual reason a
+Shiny checkbox toggle can refit and redraw in ~9 seconds instead of
+minutes.
 
-**Threshold Test (`R/threshold_test.R`).** Implements a **fast,
-non-hierarchical, non-MCMC approximation** to the Threshold Test for
-infra-marginality (Simoiu, Corbett-Davies & Goel 2017) — deliberately scoped
-down from the full Bayesian hierarchical model, which would need a new
-Stan/MCMC dependency and its own multi-week validation effort.
-`aggregate_sufficient_statistics()` collapses millions of rows into
-per-(race, county) stop/search/hit counts (county stands in for
-"department," since this dataset has no department field). `fit_threshold_test()`
-then exploits a closed-form identity — a county's threshold is fully
-determined by its own observed search rate given `(a_r, b_r)`, via
-`qbeta(1 - search_rate, a_r, b_r)` — so only two parameters per race are fit
-via `stats::optim()`, no MCMC. This is a from-first-principles frequentist
-point-estimate procedure "in the spirit of" the cited literature, not a
-verbatim reproduction of any published implementation; it provides no
-partial pooling and no credible intervals. Validated in tests via parameter
-recovery on data simulated from known `Beta(a, b)` parameters.
+---
 
-**Subpopulation disparities (`R/subpop_disparities.R`).**
-`subpopulation_disparities()` disaggregates TPR/FPR/PPV per intersectional
-subgroup from a fitted model's predictions — and explicitly states the
-fairness-metrics impossibility result (Chouldechova 2017; Kleinberg,
-Mullainathan & Raghavan 2016: FPR and FNR generally can't both be equalized
-across groups with a calibrated classifier when base rates differ) in its
-output rather than implying a single model can satisfy every fairness
-definition at once.
+## 3. Data pipeline (`python/`)
 
-**Synthetic data (`R/simulate_stops.R`).** Generates schema-correct
-synthetic data matching the real `audit_ready_stops.csv` contract exactly —
-used both as the package's own `tests/testthat/` fixtures and by
-`r_dashboard/dev/generate_synthetic_data.R` (now a thin wrapper around it;
-see §3.3 and §7).
+Three scripts, run in order by `make all`, each a plain script — not a DAG
+framework. Appropriate at this scale: three steps, no branching, no
+scheduling need. See the README for exact invocation; this section covers
+what each script decides and why.
 
-### 3.1 App shell (`app.R`)
+**`01_fetch_census.py`** pulls three ACS 5-Year variables for Texas
+counties (`B19013_001E` median income, `B17001_002E`/`B17001_001E`
+poverty count/universe, `poverty_rate` derived as their ratio) and derives
+a `county_join_key` by normalizing the Census `NAME` field
+(`"Harris County, Texas"` → `"HARRIS"`).
 
-Built on `shiny` + `bslib` (Bootstrap 5 theming, `litera` theme) using the
-modern `page_sidebar()` layout primitive rather than the older
-`fluidPage()`/`sidebarLayout()` pair. The sidebar exposes exactly two
-reactive inputs:
+**`02_clean_stops.py`** is the heaviest-lifting script, both
+computationally and in schema decisions. The raw Stanford TX file is
+~27.4M rows across 44 columns; `pandas.read_csv` reads it with
+`chunksize=500_000` directly against the `.zip` (pandas decompresses
+transparently) and `usecols=RAW_COLUMNS_NEEDED` to skip parsing the 35
+columns nothing downstream touches — the C parser skips unrequested
+columns during parsing, which is materially faster than reading everything
+and dropping columns after. Filtering to `subject_race in
+{white,black,hispanic}` and to 2015–2017 (out of the full 2006–2017 range)
+gets the working set down to ~5.6M rows, the point at which an interactive
+`glm()` refit stays under ~10 seconds. `county_join_key` is derived here
+independently of `01_fetch_census.py` using the identical normalization
+logic — a duplication, not a shared helper, flagged in §12.
 
-- `outcome_var` — a `selectInput` choosing the glm's dependent variable
-  (`search_conducted` or `contraband_found`)
-- `controls` — a `checkboxGroupInput` choosing which covariates layer into
-  the model (demographics / poverty / income / time of day)
+Three schema facts, discovered against the actual file rather than assumed
+up front, shape everything downstream: **no FIPS at the stop level** (only
+free-text `county_name`, hence the name-based join), **no arrest outcome**
+(`outcome` is only ever `"warning"`/`"citation"`, so `contraband_found`
+serves as the dashboard's second target instead of an arrest indicator),
+and **no `subject_age`** (Texas State Patrol doesn't report it, so the
+"Individual Demographics" control layer is driver sex only). `_validate_columns`
+runs a zero-row header read before the full chunked pass, so a schema
+mismatch fails fast with a clear message instead of a `KeyError` partway
+through a multi-minute read.
 
-The main panel is a `navset_card_tab` with two panels: "Regression Model"
-(the regression module's UI, unchanged from before) and "Data Transparency &
-Provenance" (`R/mod_datasheet.R`, new — reads a `datasheet.json` sitting next
-to the processed CSV via `duboisR::read_datasheet()` and renders its
-motivation/limitations alongside a live `duboisR::audit_composition()`
-breakdown; degrades to a "run `build_datasheet_wizard()`" message when no
-datasheet exists yet, rather than erroring). Both tabs need the same loaded
-data, so the `stops_data()` reactive that used to live inside the regression
-module's closure was lifted up into `app.R`'s `server()` and is now passed
-into both modules as a parameter.
-
-Three more panels were added later, all reusing the same `stops_data()`
-reactive — the `navset_card_tab` now has five panels, not two: "Veil of
-Darkness" (`R/mod_veil_of_darkness.R`, see §5/§7.6), "Threshold Test"
-(`R/mod_threshold_test.R`, see §7.6), and "Subpopulation Disparities"
-(`R/mod_subpop_disparities.R`, see §7.7 — the one panel that also needs
-`audit_fit()`, not just `stops_data()`, since it scores the same fitted
-model the Regression Model tab shows rather than an independent one;
-`audit_fit()` itself was lifted from `mod_regression.R` into `server()` for
-exactly this sharing, the same move `stops_data()` went through earlier).
-
-**Headless rendering fix:** macOS defaults `ggplot2`'s bitmap device to
-`"quartz"`, which requires an active window-server session. When Shiny is
-launched via `Rscript` outside a foreground GUI session (e.g. over SSH, in
-CI, or from a background process), quartz doesn't error — it hangs
-indefinitely, so `renderPlot()` never resolves and the forest plot area just
-stays blank forever with no error message. `app.R` guards against this with
-`if (capabilities("cairo")) options(bitmapType = "cairo")` before any Shiny
-code runs, since Cairo works headless. This is exactly the kind of failure
-that's silent and confusing to debug from symptoms alone, which is why it's
-called out explicitly in a comment at the top of the file.
-
-### 3.2 Regression module (`R/mod_regression.R`)
-
-Written as a proper Shiny module (`regression_module_ui` /
-`regression_module_server` with namespacing via `NS(id)`), even though the
-app currently only instantiates it once. This buys two things: no global ID
-collisions if a second model panel is added later (e.g. a side-by-side
-comparison view), and a clean seam for testing the module in isolation.
-
-**Data loading now lives in `app.R`'s `server()`** (see §3.1 — it moved up
-to be shared with the new provenance tab), still gated behind a
-`validate(need(...))` check for the processed CSV's existence, still
-releveling `subject_race` — but via `duboisR::dubois_relevel()` now rather
-than an inline `stats::relevel()` call.
-
-**The module itself is a thin reactive wrapper around the `duboisR`
-package** (§3.0), calling `duboisR::build_formula()` then
-`duboisR::fit_audit_glm()`. Both the reference-level fix and the
-closed-form Wald-CI computation (`estimate ± 1.96·SE` on the log-odds
-scale, exponentiated — chosen over `broom::tidy(conf.int=TRUE)`'s
-profile-likelihood default specifically because that hangs at 5.6M rows)
-apply exactly as before; they live in `duboisR/R/glm_utils.R`, unit-tested
-independent of Shiny. Every checkbox toggle still invalidates
-`build_formula()` → `fit_audit_glm()` → `model_summary()` → the plot/table,
-with Shiny's dependency graph handling recomputation automatically.
-
-**The `audit_fit()` reactive itself no longer lives inside this module** —
-it moved up into `app.R`'s `server()` (same move `stops_data()` made in
-§3.1), because `mod_subpop_disparities.R` (§7.7) needs to score the exact
-same fitted model this tab plots, not an independently-fit one.
-`regression_module_server()`'s signature shrank accordingly: it now just
-takes `audit_fit` (a reactive) instead of `stops_data`/`outcome_var`/
-`controls` separately and building the fit itself.
-
-**Output surfaces are unchanged:** a `ggplot2` forest plot (point + 95% CI
-per race coefficient, `geom_pointrange`, flipped coordinates, a dashed
-reference line at OR = 1) and a plain `renderTable` of the same numbers,
-filtered to `subject_race` terms only.
-
-### 3.3 Synthetic data generator (`dev/generate_synthetic_data.R`)
-
-A standalone script (not part of the reactive app, not sourced by `app.R`)
-that generates a 2,000-row dataset matching the dashboard's expected shape,
-with a seeded RNG (`seed = 42`) for reproducibility. It exists so the Shiny
-plumbing — reactivity, plotting, table rendering — can be exercised and
-debugged without first standing up the real ~7GB data pipeline, API key, and
-multi-minute chunked read.
-
-**Now a thin wrapper around `duboisR::simulate_stops()`** (§3.0) rather than
-its own standalone generation logic — this fixes the schema-drift rough edge
-§7 used to document: the old version fabricated `subject_age` and
-`is_arrested`, neither of which exist in the real Texas data; `simulate_stops()`
-produces exactly the real data contract's columns, since it's also what the
-package's own `tests/testthat/` fixtures are built from (one implementation,
-two consumers, no drift possible between them). It still bakes in a
-synthetic race effect specifically so the forest plot has a visible,
-non-null disparity to render — useful for checking the plot looks right,
-worthless as a finding.
+**`03_merge_features.py`** inner-joins `stops_clean.csv` to
+`census_stratifiers.csv` on `county_join_key`. `how="inner"` silently drops
+any stop whose normalized county name doesn't match a Texas county from
+the Census pull — but not silently overall: the script computes the
+unmatched set and prints a warning with the distinct names (capped at 10)
+and a count, so a join-key mismatch shows up as an observable warning
+rather than an unexplained row-count discrepancy.
 
 ---
 
 ## 4. The data contract: `audit_ready_stops.csv`
 
-This is the one interface between the Python and R halves of the system.
-Columns, as written by `03_merge_features.py` and consumed by
-`r_dashboard/` (via `duboisR`'s functions, §3.0):
+The one interface between the Python and R halves. Every `duboisR`
+function that takes stop-level `data` assumes these column names exist —
+there's no schema-validation layer; `abort_if_missing_cols()` (in
+`utils.R`, called at the top of nearly every exported function) is the
+closest thing to one, and it only catches a missing column, not a wrong
+type.
 
 | Column | Type | Origin | Notes |
 |---|---|---|---|
-| `subject_race` | factor (releveled to `white`) | Stanford | restricted to white/black/hispanic |
+| `subject_race` | string, releveled to `white` before modeling | Stanford | restricted to white/black/hispanic |
 | `subject_sex` | string | Stanford | the entire "demographics" control layer |
-| `search_conducted` | 0/1 | Stanford | outcome option 1 |
-| `contraband_found` | 0/1 | Stanford | outcome option 2 (stand-in for arrest — no arrest field exists) |
-| `hour` | int 0–23 | derived from `date`+`time` | used as `factor(hour)` in the model |
-| `date` | date | Stanford | carried through but not yet used by the model — see §5 |
-| `violation` | string | Stanford | carried through but not yet used by the model — see §5 |
-| `search_basis` | string | Stanford | carried through but not yet used by the model — see §5 |
-| `poverty_rate` | float | Census (derived) | socioeconomic control |
-| `median_income` | float | Census | socioeconomic control |
-| `county_fips` | string | Census | reference/mapping only, not a model input |
+| `search_conducted` | 0/1, `NA` for ~38% of real rows | Stanford | Stanford doesn't report this for every stop — see `subpop_disparities.R`'s NA handling below |
+| `contraband_found` | 0/1, structurally `NA` off-search | Stanford | stand-in for arrest — no arrest field exists |
+| `hour` | int 0–23, no minutes | derived from `date`+`time` | resolution ceiling for Veil of Darkness — see §5.5 |
+| `date` | date | Stanford | consumed by Veil of Darkness |
+| `violation`, `search_basis` | string | Stanford | carried through, not yet consumed by any model — forward-provisioned for a pretextual-stop or consent-search analysis that isn't scoped |
+| `poverty_rate`, `median_income` | float | Census | socioeconomic controls |
+| `county_fips` | string | Census | join target for Veil of Darkness centroids; reference-only elsewhere |
 
-`county_join_key` deliberately does **not** survive into the final output —
-it's a join mechanism internal to the pipeline, not a field the dashboard
-should ever need.
+`county_join_key` deliberately does not survive into this file — it's an
+internal pipeline join mechanism, not something any statistical function
+should ever reference.
 
 ---
 
-## 5. Columns that exist but aren't wired up yet
+## 5. `duboisR`: the diagnostic engine
 
-Three columns (`date`, `violation`, `search_basis`) are threaded all the way
-through the pipeline — read from raw, kept through cleaning, kept through the
-merge — but are not referenced anywhere in `mod_regression.R`'s formula
-construction. `02_clean_stops.py` documents this as intentional
-forward-provisioning:
+Everything in this section lives under `duboisR/R/`. The package
+implements what its own vignette (`vignette("wells-du-bois-protocol",
+package = "duboisR")`) calls the **Wells-Du Bois Protocol** — named for
+W.E.B. Du Bois (statistical data visualization as a tool against an
+institution's official narrative) and Ida B. Wells (`The Red Record`,
+1895 — using an institution's own reporting against its official
+narrative). The protocol's working premise, stated plainly: administrative
+data produced by an institution is not a transparent window onto the world
+that institution polices. It is a record of that institution's decisions.
+Every function below exists to make some part of that gap visible and
+measurable rather than left implicit.
 
-- **`date`** → Veil of Darkness natural experiment. **Now implemented, both
-  engine and dashboard.** `duboisR::veil_of_darkness_test()` (§3.0) uses
-  `date` (+ `hour` + `county_fips`) to compute sunset/dusk per county/day and
-  classify stops as daylight vs. dark; `r_dashboard/R/mod_veil_of_darkness.R`
-  (§3.2's sibling module) exposes it as its own "Veil of Darkness" tab rather
-  than a sidebar checkbox layer on the main regression, since it's a distinct
-  model (race + `is_dark` + `factor(hour)`, restricted to intertwilight
-  hours) rather than an additional covariate on `fit_audit_glm()`'s formula.
-- **`violation`** (equipment vs. moving violation type) and **`search_basis`**
-  (consent vs. probable-cause search) are carried through unused.
-  `02_clean_stops.py` retains them as forward-provisioned string columns —
-  the kind of thing a pretextual-stop or consent-search disparity analysis
-  would need — but no such analysis is scoped, planned, or implemented in
-  `duboisR` today. Building one isn't just wiring: it means first deciding
-  the methodology (e.g. what counts as "pretextual"), which this project
-  hasn't done and isn't committing to here.
+### 5.0 Shared statistical core (`glm_utils.R`)
+
+Three functions everything else builds on:
+
+- `dubois_relevel(data, col, ref)` — `glm()`'s default factor encoding
+  picks the reference level alphabetically, which for `subject_race` would
+  silently make `"black"` the baseline and invert every reported disparity's
+  framing. This makes the reference level an explicit, validated argument
+  instead of an alphabetical accident.
+- `build_formula(outcome, base_term, control_map, controls_selected)` — a
+  small formula-string builder driven by a named list, so a Shiny
+  checkbox group maps directly onto RHS terms without inline `paste()`
+  logic scattered through the app.
+- `fit_audit_glm(data, formula, ...)` — `glm()` plus the closed-form Wald
+  CI from §2, wrapped in a `duboisR_glm_fit` S3 object with `$model` (the
+  raw fit) and `$summary` (a tibble: `term`, `estimate`, `std.error`,
+  `statistic`, `p.value`, `conf.low`, `conf.high`, exponentiated to odds
+  ratios by default). Every other function that needs a fitted model —
+  `veil_of_darkness_test()`, the dashboard's regression tab —
+  calls this instead of `glm()` directly.
+
+A fourth function, `predicted_probabilities()`, complements the
+reference-relative odds ratios in `$summary` with an absolute view: for
+every level of a grouping variable (e.g. every race), the model's predicted
+probability of the outcome, holding every other predictor at a reference
+value. It scores via `predict(newdata = ...)` against freshly constructed
+rows rather than reusing `model.frame(fit$model)`, specifically so formula
+terms computed from a raw column (`factor(hour)` on an integer `hour`) get
+re-derived correctly. One subtlety worth knowing if you extend this: a
+predictor referenced through `factor(...)` always uses its *mode*, not its
+mean, even though the underlying column is numeric — `mean(hour) == 11.7`
+isn't a level `factor(hour)` was ever fit on, and `predict()` errors ("has
+new levels") if asked to score one.
+
+### 5.1 Datasheets for Datasets (`datasheet.R`, `datasheet_wizard.R`)
+
+Implements Gebru et al. 2021's "Datasheets for Datasets" — a standardized
+seven-section questionnaire (Motivation, Composition, Collection Process,
+Preprocessing, Uses, Distribution, Maintenance) that documents a dataset's
+provenance and limitations before anyone downstream builds on it.
+
+`use_datasheet()` scaffolds a static template into the researcher's
+project; `build_datasheet_wizard()` is an interactive CLI walkthrough of
+the identical question structure that writes to a resumable, incremental
+`datasheet.json`. Both are generated from one internal
+`datasheet_questions` list (`data-raw/build_datasheet_questions.R`), so the
+template and the wizard cannot drift apart. Neither automates the
+qualitative reflection — this is a design decision inherited directly from
+the source paper, which explicitly warns that automating the reflection
+defeats its purpose. What `duboisR` *does* automate is producing the
+precise statistics some of the questions require (§5.2–5.4), so the
+researcher is filling in judgment, not arithmetic.
+
+```r
+devtools::load_all("duboisR")
+build_datasheet_wizard(output = "data/processed/datasheet.json")
+# -> walks all 7 sections, resumable, crash-safe (saves after every section)
+```
+
+`seed_datasheet_answers()` is the non-interactive counterpart — used to
+seed a first-pass draft or script an update to one section — with the same
+never-silently-overwrite discipline as the wizard's `resume = TRUE`: an
+already-answered question is left untouched unless
+`overwrite_existing = TRUE`. `read_datasheet()` is a thin, defensive
+`jsonlite::read_json()` wrapper that returns `NULL` (not an error) when no
+datasheet exists yet, so both the Shiny tab and `run_grounding_experiment()`
+can degrade gracefully instead of crashing on missing state.
+
+### 5.2 Composition & missingness auditing (`audit_composition.R`)
+
+`audit_composition(data, group_col, missing_col)` computes exactly the
+numbers the datasheet's Composition section needs: representation counts
+and percentages per subgroup (intersectional if `group_col` has length >
+1), and — if `missing_col` is given — subgroup-specific missingness rates.
+The function deliberately stops at computing and formatting; it doesn't
+narrate whether a missingness pattern is concerning. That's the
+researcher's judgment call, the same division of labor as §5.1.
+
+### 5.3 Identity Proxy diagnostic (`proxy_diagnostics.R`)
+
+The core insight this function operationalizes: *excluding a protected
+attribute from a model does not remove the information it carries if that
+information is encoded in other columns.* Zip code, county, even vehicle
+age can proxy for race well enough that a "race-blind" model reproduces
+race-correlated outcomes anyway. `check_proxies()` tests this directly by
+temporarily inverting the modeling problem — predicting the protected
+attribute *from* the "neutral" covariates:
+
+```r
+check_proxies(
+  data, protected_attr = "subject_race",
+  predictors = c("county_fips", "poverty_rate", "median_income", "hour"),
+  method = "rf"   # ranger::ranger() if installed, else a one-vs-rest glm() fallback
+)
+```
+
+It reports classification accuracy against a stratified held-out split,
+compares that to the no-information baseline (majority-class accuracy),
+and calls the gap the `lift`. A `lift` above `warn_threshold` (default
+0.10) flags the covariate set as identity proxies, and reports which
+individual covariates drove that (variable importance for the random
+forest path; the largest `|z|` coefficient per covariate across the
+one-vs-rest logistic fits for the `glm` fallback). Run against the real
+dataset (`precompute_audit.R`), `county_fips + poverty_rate + median_income
++ hour` alone predicts `subject_race` at ~68% accuracy against a ~47%
+baseline — geography and time of day are meaningfully proxying for race in
+this data, which is exactly the finding a naive "we didn't include race in
+the model" argument would miss. Worth noting: the `glm` fallback routinely
+produces a (quasi-)separated fit warning — that's the diagnostic *working*
+(a covariate perfectly predicting a race level is the strongest possible
+proxy signal), so the warning is suppressed rather than left to alarm the
+caller.
+
+### 5.4 Tendentious-outcome diagnostic (`tendentious.R`)
+
+A models-trained-on-human-decisions problem, stated as a forced
+classification rather than a computation: `check_tendentious()` prompts
+the researcher (interactively, or via an explicit `classification`
+argument in non-interactive use) to categorize an outcome variable as
+`"objective"`, `"subjective"`, or `"administrative"`. `search_conducted`
+and `contraband_found` are both classified `"administrative"` in this
+project's own precomputed artifacts — an officer's discretionary decision
+to search is not an objective measurement of what a driver was carrying,
+and a model trained on it will faithfully reproduce whatever bias was in
+that discretion. `classification = NULL` with `interactive = FALSE` is a
+hard error, not a silent default — this categorization is required to be
+explicit, never assumed.
+
+### 5.5 Veil of Darkness (`veil_of_darkness.R`)
+
+The most literal implementation of the package's Du Boisian framing: a
+natural experiment exploiting the fact that an officer's ability to
+observe a driver's race is worse after dark (Grogger & Ridgeway 2006). If
+a racial disparity in stops is driven by the officer visually profiling
+race, that disparity should shrink once darkness removes the officer's
+ability to act on race at all.
+
+The design's key control is the **intertwilight restriction**: rather than
+comparing all daylight stops to all dark stops (confounded by the fact
+that *who's on the road* varies by clock time regardless of race — a 7am
+commute looks nothing like a 7am on a winter morning six months later), the
+comparison is restricted to clock hours that are *sometimes* daylight and
+*sometimes* dark across the data's date/county range. `prepare_veil_of_darkness_data()`
+computes this in two stages:
+
+```r
+compute_daylight_status(data, date_col, hour_col, county_fips_col, centroids)
+# joins the bundled 254-row TX county centroid table (dubois_tx_centroids(),
+# sourced from the Census Gazetteer Files) and calls
+# suncalc::getSunlightTimes() vectorized over unique (date, county) pairs —
+# not per-row, which is the difference between this finishing in ~2 minutes
+# and not finishing at all at 5.6M rows.
+```
+
+Two implementation details are worth surfacing because they were measured,
+not assumed: the joins against `centroids` and the unique `(date, county)`
+pairs use `match()` rather than `merge()` — base `merge()`'s sort-and-match
+join measured 250–800s wall time at this row count (and reorders the
+result as a side effect) against 2–15s for the hash-based `match()`
+lookup with row order preserved. `stop_datetime` is built via
+`ISOdatetime()` on `POSIXlt` components rather than `paste()`-then-parse
+string construction, for the same reason (~65s vs. ~125s). Neither is a
+premature optimization — both were the difference between the precompute
+script's Veil of Darkness step finishing in minutes versus not being
+practical to run at all against the real dataset.
+
+Because the data contract only carries an integer `hour` — no minutes —
+every stop's timestamp is assumed to fall at the top of its recorded hour.
+This is a genuine resolution ceiling inherited from the upstream Stanford
+schema, not a shortcut taken here; `fit_veil_of_darkness()`'s output
+carries it as an explicit caveat on every result rather than a silent
+approximation.
+
+`fit_veil_of_darkness(prepared, outcome_var, interaction)` is the cheap,
+outcome-dependent second stage — split out from the expensive daylight
+classification specifically so a caller refitting against multiple
+outcomes (a Shiny dropdown) pays the ~2-minute classification cost once and
+reuses it. The `interaction` argument matters more than it looks: with
+`interaction = FALSE`, race and `is_dark` enter as separate additive
+effects, which can show "race matters" and "darkness matters" independently
+but cannot show whether the racial disparity itself changes in the dark —
+which is what the Grogger-Ridgeway hypothesis actually claims. Only
+`race:is_dark` (`interaction = TRUE`) tests that: a ratio below 1 on that
+interaction term means the race disparity shrinks after dark, consistent
+with profiling driven by visual identification. `fit_veil_of_darkness()`'s
+returned caveats say exactly this, conditioned on which mode was used, so
+a reader can't mistake an additive fit for a completed test of the
+hypothesis.
+
+### 5.6 Threshold Test (`threshold_test.R`)
+
+Addresses a different failure mode than Veil of Darkness: **infra-marginality**.
+Even a "fair" search policy (a single risk threshold applied uniformly)
+will show different hit rates across races if the underlying distribution
+of risk within each race differs — a higher search rate for one group
+doesn't by itself prove a lower bar was applied to that group, if that
+group's marginal searched driver was still, on average, more likely to be
+carrying contraband. The Threshold Test (Simoiu, Corbett-Davies & Goel
+2017) exists to distinguish "different threshold" from "different risk
+distribution" as explanations for an observed search/hit-rate pattern.
+
+The full published method is a hierarchical Bayesian model fit via MCMC.
+`duboisR` implements a **fast, non-hierarchical, non-MCMC approximation**,
+deliberately scoped down — a Stan/MCMC dependency and its validation would
+be a multi-week undertaking on its own, disproportionate to what this
+project needs from it (a point estimate to compare against the other
+diagnostics, not a publication-grade Bayesian result). The approximation's
+structure:
+
+1. `aggregate_sufficient_statistics()` collapses millions of stop-level
+   rows into per-(race, county) counts — stop count `n`, search count `S`,
+   hit count `H` (county stands in for "department," since this dataset has
+   no department field).
+2. Each race's searched drivers are modeled as having latent risk
+   `p ~ Beta(a_r, b_r)`, shared across all of that race's counties (the
+   simplification relative to the full hierarchical model, which would let
+   this vary by county too).
+3. The trick that makes this fast: given `(a_r, b_r)`, a county's search
+   threshold isn't a free parameter to fit — it's *derived in closed form*
+   from that county's own observed search rate, `t = qbeta(1 - search_rate,
+   a_r, b_r)`. This is just the inverse-CDF identity
+   `1 - pbeta(t, a, b) == search_rate` read backwards. Only two numbers per
+   race — `(a_r, b_r)` — are actually fit, via `stats::optim()` minimizing
+   weighted squared error between predicted and observed hit rate:
+
+```r
+objective <- function(par) {
+  a <- par[1]; b <- par[2]
+  t <- stats::qbeta(1 - fit_cells$search_rate, a, b)
+  predicted <- .dubois_predicted_hit_rate(t, a, b, fit_cells$search_rate)
+  sum(w * (predicted - fit_cells$hit_rate)^2)
+}
+stats::optim(par = c(a = 1, b = 1), fn = objective, method = "L-BFGS-B",
+             lower = c(1e-3, 1e-3))
+```
+
+where the predicted hit rate under threshold `t` is the conditional mean of
+a Beta above that threshold, `E[p | p > t] = (a/(a+b)) · (1 - pbeta(t, a+1,
+b)) / search_rate` — the denominator is exactly `1 - pbeta(t, a, b)` by
+construction, so it equals `search_rate` and doesn't need to be computed
+separately.
+
+This is explicitly described in the package's own docs as "in the spirit
+of," not "identical to," the cited literature — no partial pooling across
+sparse counties, no credible intervals, point estimates only. It's
+validated the way a from-scratch numerical method should be: parameter
+recovery on data simulated from a known `Beta(a, b)` (`test-threshold_test.R`),
+confirming the `optim()` fit actually recovers the generating parameters
+rather than just converging to *something*.
+
+One real numerical edge case surfaced running this against the actual
+5.6M-row Texas data, documented rather than hidden: the fitted `(a, b)`
+for the "white" race come back extremely large (~1.9×10⁸, ~2×10⁸ — a
+near-point-mass risk distribution), which drives `predicted_hit_rate`
+numerically to `NaN` across the observed range. `plot.duboisR_threshold_fit()`
+also needed `coord_cartesian(xlim = ...)` clamped to the observed data's
+range — the fitted curve's theoretical domain is the full `[0, 1]`, while
+real per-county search rates never exceed ~13%, and ggplot's default
+autoscaling (driven by the curve's extremes) squeezed every real data point
+into a sliver at the left edge without it. `mod_threshold_test.R` surfaces
+the `NaN` case as an explicit UI flag (`a`/`b` > 1e6 alongside a nonzero
+`convergence_code`) rather than silently rendering a blank curve.
+
+### 5.7 Subpopulation disparities (`subpop_disparities.R`)
+
+Disaggregates a fitted model's error rates — TPR, FPR, PPV — per
+intersectional subgroup (e.g. `black_female`, formed by pasting
+`subgroup_cols` together), rather than reporting one pooled accuracy
+number that can hide starkly different error rates by group. The function
+states the mathematical impossibility result directly in its output
+(Chouldechova 2017; Kleinberg, Mullainathan & Raghavan 2016): when base
+rates differ across groups, a calibrated classifier (equal PPV) generally
+cannot also equalize FPR and FNR simultaneously. This isn't a limitation
+of the fit — it's a structural fact about any classifier, so the function
+reports the trade-off rather than implying it could be tuned away.
+
+Two real bugs, found wiring this against the actual dataset rather than
+synthetic fixtures, are worth knowing about because they're the kind of
+thing that silently corrupts results without erroring:
+
+- `search_conducted` is `NA` (not `FALSE`) for ~38% of real rows. `glm()`
+  drops `NA` rows automatically when *fitting* (`na.action = na.omit`),
+  but this function scores against caller-supplied `data` independently of
+  the model's training frame — an unfiltered `NA` there poisons every
+  group's confusion-matrix `sum()` (default `na.rm = FALSE`). Fixed by
+  dropping `NA`-outcome rows before scoring, with the drop count recorded
+  in the result's `"notes"` attribute.
+- The default `threshold = 0.5` is degenerate for an outcome this
+  imbalanced — predicted probabilities for `search_conducted` top out
+  around 3%, so every row predicts negative and TPR/PPV come back `NaN`
+  (0/0) regardless of the NA fix above. The dashboard doesn't hardcode
+  `0.5`; `mod_subpop_disparities.R` defaults its threshold slider to the
+  outcome's own observed base rate and lets the researcher move off it.
+
+### 5.8 LLM datasheet-grounding experiment (`grounding_experiment.R`, `llm_clients.R`)
+
+The newest and most unusual piece of the package: rather than *asserting*
+that a datasheet makes a dataset's provenance legible, this measures it —
+against an LLM as a concrete downstream consumer. `run_grounding_experiment()`
+asks the same flagship model the same fixed battery of boolean/enum/numeric
+questions about the dataset twice: once **naive** (a compact, pseudonymized
+description of the schema plus a small random sample — see
+`build_data_context()`), once **grounded** (the identical description plus
+the full `datasheet.json` and an instruction to consult it first). Each
+answer is scored against a hand-authored `expected_answer`.
+
+```r
+run_grounding_experiment(
+  data_path = "data/processed/audit_ready_stops.csv",
+  datasheet_path = "data/processed/datasheet.json",
+  providers = c("anthropic", "openai"),
+  models = list(anthropic = "claude-opus-5", openai = "gpt-5.1"),
+  n_repeats = 2
+)
+```
+
+Two design choices keep this from being a one-off demo:
+
+- **Pseudonymization of the raw sample.** `build_data_context()` rewrites
+  identifier-like columns (`county_fips`) as opaque `region_NN` labels and
+  dates as relative offsets before either condition ever sees them. Without
+  this, the *naive* condition gets a free shortcut that has nothing to do
+  with grounding: every Texas FIPS code starts with `48`, which a
+  knowledgeable model can recognize on sight, and a real calendar range
+  reveals the year restriction directly. This keeps the comparison honest —
+  a difference between conditions is attributable to the datasheet, not to
+  incidental real-world leakage in the raw sample.
+- **Forced structured output, not parsed prose.** Every provider call goes
+  through a JSON-Schema-constrained tool call (`grounding_response_schema()`,
+  translated to each provider's own dialect — see `gemini_response_schema()`
+  for the OpenAPI-subset translation Gemini needs). Each answer carries a
+  self-reported 0–100 confidence, nested as `{answer, confidence}` rather
+  than a bare scalar, specifically so the report can distinguish "grounding
+  changed the answer" from "grounding changed how sure the model was" —
+  these can differ even when the raw answer doesn't move.
+
+`n_repeats > 1` runs independent trials per (provider, condition), and
+`summarize_grounding_trials()` collapses them into a majority-vote answer
+plus an agreement rate — because providers aren't called at temperature 0,
+a single trial's "changed answer" could be sampling noise rather than a
+real grounding effect; the agreement rate is what lets a reader tell those
+apart. `call_anthropic()`, `call_openai()`, `call_gemini()`, and
+`call_grok()` are the four provider clients — `call_openai()` and
+`call_grok()` share one implementation (`call_openai_compatible()`) since
+xAI's API is explicitly OpenAI-compatible, and Gemini gets its own path
+since it returns schema-conformant JSON directly rather than going through
+a tool-call.
+
+This is opt-in (`make grounding`, not part of `make all`/`make results`) —
+it makes real, billed API calls — but it's the piece of this package that
+turns "datasheets improve data legibility" from an assertion the Datasheets
+for Datasets paper makes into a number this project's own dataset actually
+produced.
+
+### 5.9 Synthetic data (`simulate_stops.R`)
+
+`simulate_stops(n, seed, counties)` generates data matching the real
+`audit_ready_stops.csv` contract exactly — same columns, same types, no
+extra fields. It's the single generator behind both the package's own
+`tests/testthat/` fixtures and `r_dashboard/dev/generate_synthetic_data.R`
+(a thin wrapper around it), which matters structurally: one implementation
+means the dashboard's dev-mode data and the package's test fixtures cannot
+drift apart, unlike the pipeline's original standalone synthetic generator
+this replaced (see §12). A synthetic race effect is baked into
+`search_conducted` purely so plots have a visible, non-null signal to
+render when checking that a chart looks right — it is manufactured, not a
+finding, and the docstring says so explicitly.
 
 ---
 
-## 6. Environment & toolchain
+## 6. Using `duboisR` directly
 
-- **Python:** a local `.venv` (Python 3.11), dependencies pinned only by name
-  in `requirements.txt` (`pandas`, `requests`, `pyarrow`, `python-dotenv`).
-  `pyarrow` is declared but not yet imported anywhere in `python/` — it's a
-  reserved dependency, most likely for a future faster CSV parsing engine or
-  Parquet intermediate format rather than something currently exercised.
-- **R (dashboard):** no lockfile / `renv` yet — packages (`shiny`, `bslib`,
-  `tidyverse`, `broom`, `devtools`) are installed globally per the README's
-  `install.packages(...)` call. `broom` is a listed dependency even though
-  `mod_regression.R` (now via `duboisR::fit_audit_glm()`) bypasses
-  `broom::tidy()` for the CI calculation (§3.0/§3.2) — it may still be used
-  elsewhere or was kept from before that decision was made.
-- **R (`duboisR/` package):** a real `DESCRIPTION`-managed dependency set —
-  still no `renv` lockfile, but `Imports`/`Suggests` are explicit (`rlang`,
-  `ggplot2`, `readr`, `tibble`, `cli`, `jsonlite`, `suncalc`; `Suggests`:
-  `testthat`, `ranger`, `withr`, `devtools`, `knitr`, `rmarkdown`). Building
-  the vignette additionally needs `pandoc` (a system binary, not an R
-  package — `brew install pandoc` on macOS). `devtools::check()` passes
-  clean (0 errors, 0 warnings, 0 notes).
-- **Secrets:** a single `CENSUS_API_KEY` in a gitignored root `.env`, loaded
-  via `python-dotenv`. No other credentials in the system.
-- **Data is never committed.** Both `data/raw/*` and `data/processed/*` are
-  gitignored (only `.gitkeep` placeholders survive), including the ~1GB raw
-  zip and the multi-GB processed CSVs. Reproducing the dataset means
-  re-running the pipeline, not pulling from git.
-- **macOS build gotchas** (Xcode Command Line Tools path, `clang` C-standard
-  mismatches for `tidyverse`'s compiled dependencies, missing `harfbuzz` /
-  `fribidi` / `libtiff` system libs) are documented in the README rather than
-  here, since they're setup instructions, not architecture.
+The dashboard is one consumer of this package, not the only reasonable
+one. Everything below runs from an R console with the package loaded —
+either `library(duboisR)` after `devtools::install("duboisR")`, or
+`devtools::load_all("duboisR")` from the repo root for dev-mode use without
+an install step.
+
+```r
+devtools::load_all("duboisR")
+
+stops <- readr::read_csv("data/processed/audit_ready_stops.csv")
+stops <- dubois_relevel(stops, "subject_race", ref = "white")
+
+# 1. Fit and inspect a regression directly
+fit <- fit_audit_glm(stops, search_conducted ~ subject_race + poverty_rate)
+print(fit)                                   # md_table of term/OR/CI/p
+plot(predicted_probabilities(fit, stops, "subject_race"))
+
+# 2. Check whether "neutral" geography/socioeconomic covariates proxy for race
+check_proxies(stops, predictors = c("county_fips", "poverty_rate", "median_income"))
+
+# 3. Classify an outcome variable's epistemic status
+check_tendentious("search_conducted", classification = "administrative", interactive = FALSE)
+
+# 4. Run the Veil of Darkness natural experiment
+vod <- veil_of_darkness_test(stops, outcome_var = "search_conducted", interaction = TRUE)
+print(vod); plot(vod)
+
+# 5. Threshold Test for infra-marginality
+suff_stats <- aggregate_sufficient_statistics(stops)
+tt <- fit_threshold_test(suff_stats)
+plot(tt)
+
+# 6. Disaggregate error rates across intersectional subgroups
+subpopulation_disparities(fit, stops, actual_col = "search_conducted",
+                           subgroup_cols = c("subject_race", "subject_sex"))
+
+# 7. Scaffold and fill in a datasheet
+use_datasheet("datasheet.md")                # static template
+build_datasheet_wizard("datasheet.json")     # interactive, resumable
+```
+
+Every function above is documented via `?function_name` and covered by
+`tests/testthat/`; nothing here is dashboard-specific plumbing.
 
 ---
 
-## 7. Known rough edges
+## 7. Precompute & caching (`inst/scripts/precompute_audit.R`)
 
-Worth naming explicitly, since a design doc that only describes the happy
-path is misleading:
+The dataset is a frozen, one-time pull — nothing about it changes between
+sessions — so the dashboard renders precomputed fits rather than fitting
+live per user. `precompute_audit.R` (run by `make results`) calls straight
+into the `duboisR` functions from §5 and writes one `.rds` per artifact:
+two baseline regressions, Veil of Darkness's expensive prepared/classified
+data plus per-outcome fits, the Threshold Test, dataset composition, the
+identity-proxy check, and the tendentious-outcome classifications.
+
+Two decisions in that script are worth knowing if you're extending it:
+
+- **`strip_model()` before serializing.** A `glm` fit object embeds a full
+  copy of its training data (model frame, fitted values, residuals,
+  weights) — at 5.6M rows, several length-`nrow(data)` vectors balloon each
+  cached fit to tens of MB even though nothing downstream reads `$model`
+  after fitting (only `$summary`). Every cache write drops `$model` first,
+  keeping the S3 class and print/plot methods intact.
+- **Sampling for the identity-proxy check.** `check_proxies(method = "rf")`
+  on the full 5.6M rows takes ~18 minutes for a result within 0.1 accuracy
+  points of a 300k-row sample (67.9% vs. 68.0% accuracy, 20.8 vs. 20.9-point
+  lift) — not worth paying in every `make results` run for that difference,
+  so the precomputed artifact uses a fixed-seed 300k-row sample instead.
+
+`app.R`'s `audit_fit()` reactive reads the cached no-controls artifact
+instantly when no sidebar checkboxes are selected, and falls back to a live
+`fit_audit_glm()` call (~9s) the moment any control is toggled — precomputing
+all 16 possible control combinations wasn't worth it against a live refit
+that's already fast enough to feel interactive. The Veil of Darkness tab
+follows the same pattern one level cheaper: any control selected still
+reuses the cached, already-daylight-classified `veil_prepared.rds` (skipping
+the ~2-minute classification pass) and only refits the cheap outcome-dependent
+half live.
+
+---
+
+## 8. Shiny dashboard architecture (`r_dashboard/`)
+
+Built on `shiny` + `bslib` (Bootstrap 5, `litera` theme) using
+`page_sidebar()`. The sidebar exposes two reactive inputs — target outcome,
+and which control layers to include — shared across every tab via a
+`navset_card_tab` with six panels: Regression Model, Veil of Darkness,
+Threshold Test, Subpopulation Disparities, Data Transparency & Provenance,
+and LLM Grounding Test. Each is its own Shiny module
+(`R/mod_*.R`, `*_module_ui()`/`*_module_server()` with `NS(id)` namespacing)
+— not because the app instantiates any of them twice today, but because it
+gives each tab a clean seam for isolated testing and no global ID
+collisions if it ever needs to.
+
+`stops_data()` and `audit_fit()` both live in `app.R`'s `server()`, not
+inside any one module — they moved up specifically because Subpopulation
+Disparities needs to score the exact fitted model the Regression tab shows,
+and Data Transparency needs the same loaded dataset the Regression tab
+does. Lifting shared reactives up rather than duplicating them per module
+is the load-bearing reason the tabs stay consistent with each other.
+
+**The one genuinely nasty bug class in the Shiny layer** is a headless
+rendering hang, not a data bug: macOS defaults `ggplot2`'s bitmap device to
+`"quartz"`, which needs an active window-server session. Launched via
+`Rscript` outside a foreground GUI session (SSH, CI, a background process),
+quartz doesn't error — it hangs indefinitely, so `renderPlot()` never
+resolves and a forest plot area just stays blank forever with no error
+message anywhere. The fix is one line, guarded at the very top of `app.R`
+before any Shiny code runs:
+
+```r
+if (capabilities("cairo")) options(bitmapType = "cairo")
+```
+
+This is exactly the kind of failure that's silent and painful to debug
+from symptoms alone (a blank plot, no stack trace, no log line), which is
+why it's called out explicitly in a comment at the top of the file rather
+than left to be rediscovered.
+
+---
+
+## 9. What's unique about `duboisR`
+
+Answering directly, since it's a reasonable thing to ask before deciding
+whether to actually run this: most "fairness toolkits" ship a battery of
+generic metric functions (disparate impact ratio, equalized odds gap,
+calibration error) that you point at any classifier and any protected
+attribute — domain-agnostic by design. `duboisR` is the opposite bet: it's
+built around one specific, deeply understood domain (administrative
+traffic-stop data) and encodes domain-specific quasi-experimental methods
+that a generic toolkit has no way to offer, because they don't generalize
+to arbitrary tabular data:
+
+- **Veil of Darkness** is not a metric you compute from a confusion matrix
+  — it's a natural experiment specific to data with a timestamp and a
+  location, exploiting a real physical fact (officers can't see as well in
+  the dark) as an identification strategy.
+- **The Threshold Test** targets infra-marginality specifically, a failure
+  mode invisible to outcome-rate comparisons alone — two groups can have
+  identical search *thresholds* and still show different hit rates purely
+  because their risk distributions differ, and a plain disparity number
+  can't tell those apart.
+- **The Identity Proxy check** and **Tendentious-outcome diagnostic** are
+  aimed at the two most common ways a bias audit fools itself: variables
+  that launder a protected attribute through "neutral" geography, and
+  outcome variables that are themselves administrative discretion dressed
+  up as ground truth.
+- **The LLM grounding experiment** is, as far as this project's authors are
+  aware, a genuinely novel empirical test of the Datasheets for Datasets
+  thesis — instead of asserting that provenance documentation matters, it
+  measures whether a concrete downstream consumer's answers about a
+  dataset actually change when that documentation is present.
+
+None of these functions outputs a verdict — "this dataset is biased" is
+never a return value anywhere in this package. They output the specific
+numbers a researcher needs to reach that judgment themselves, and the
+package is explicit, in its own docs, about the trade-offs (impossibility
+results, resolution limits, approximation error) that make "a single clean
+answer" the wrong thing to expect from any one of them.
+
+---
+
+## 10. Testing
+
+`duboisR/tests/testthat/` — 88 `test_that()` blocks across every exported
+function, run against `simulate_stops()`-derived fixtures
+(`helper-fixtures.R`), independent of the real multi-GB dataset ever being
+present on disk. Two tests are worth calling out specifically because they
+validate something a plain "does it run without erroring" test wouldn't:
+the Threshold Test's parameter-recovery test (fits against data simulated
+from a *known* `Beta(a, b)` and asserts the recovered parameters are close
+to the truth — testing the method, not just the code path), and the Veil
+of Darkness suite's hand-verified daylight/dark/twilight classifications
+against known sunset times. `devtools::check()` passes clean.
+
+The Python side has no test suite — correctness there rests on
+`_validate_columns`'s header check and the unmatched-county-name warning,
+both runtime and data-dependent rather than an independent test harness.
+This asymmetry is real and unresolved; see §12.
+
+---
+
+## 11. Environment & toolchain
+
+- **Python:** a local `.venv` (3.11), `pandas`/`requests`/`pyarrow`/`python-dotenv`
+  pinned only by name in `requirements.txt`. `pyarrow` is declared but not
+  yet imported anywhere — reserved, most likely for a future faster CSV
+  parse or Parquet intermediate, not currently exercised.
+- **R (`duboisR/`):** a real `DESCRIPTION`-managed dependency set — no
+  `renv` lockfile yet, but `Imports`/`Suggests` are explicit (`rlang`,
+  `ggplot2`, `readr`, `tibble`, `cli`, `jsonlite`, `suncalc`, `httr2`;
+  `Suggests`: `testthat`, `ranger`, `withr`, `devtools`, `knitr`,
+  `rmarkdown`). Building the vignette needs `pandoc` as a system binary.
+- **R (dashboard):** `shiny`, `bslib`, `tidyverse`, `broom`, `devtools`,
+  installed globally per the README. `broom` is listed but no longer
+  actually used for CI computation (see §2) — it may still be a
+  transitive convenience import, or a leftover from before that decision.
+- **Secrets:** `CENSUS_API_KEY` (required, pipeline) plus optional
+  `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY`/`XAI_API_KEY`
+  (grounding experiment only), all in a gitignored root `.env`.
+- **Data is never committed.** `data/raw/*` and `data/processed/*` are
+  gitignored; reproducing the dataset means re-running the pipeline.
+
+---
+
+## 12. Known rough edges
+
+Worth naming explicitly — a design doc that only describes the happy path
+is misleading.
 
 1. **Join-key normalization is duplicated**, not shared, between
-   `01_fetch_census.py` and `02_clean_stops.py` (§2.1, §2.2). If the
-   normalization rule ever needs to change (e.g. to handle a county name
-   Census formats differently than Stanford does), it has to change in two
-   places in sync, with nothing enforcing that.
-2. ~~The synthetic data generator's schema has drifted from the real
-   pipeline's schema~~ **Fixed.** `r_dashboard/dev/generate_synthetic_data.R`
-   is now a thin wrapper around `duboisR::simulate_stops()` (§3.0, §3.3),
-   which produces exactly the real data contract's columns and is also what
-   the package's own tests are built from — one implementation, no more
-   drift possible between "what tests use" and "what the dashboard's dev
-   script produces."
-3. **The CSV data contract (§4) is enforced by nothing except code review.**
-   There's no schema validation step between the Python output and the R
-   input — a column rename or dtype change on either side fails at
-   `glm()`-fit time (or worse, silently, if a dtype coercion happens to
-   succeed) rather than at a clear boundary. Still true; `duboisR`'s
-   functions all assume the same fixed column names the Python pipeline has
-   always produced, and don't add a schema-validation layer of their own.
-4. **Single-state, single-outcome-pair scope.** The README frames this as a
-   multi-state (NC/CT/RI/TX) platform; only Texas is wired end-to-end today.
-   Adding a second state means re-running the same three-script pipeline
-   against a different raw file and FIPS code, plus deciding how the
-   dashboard should let a user pick a state (not yet a UI input). The
-   `duboisR` package itself is state-agnostic except for one piece:
-   `dubois_tx_centroids()` (§3.0) bundles a Texas-only county centroid table
-   for the Veil of Darkness test — a second state would need its own
-   centroid table plumbed through the same `centroids` parameter
-   `compute_daylight_status()`/`veil_of_darkness_test()` already expose for
-   exactly this kind of injection.
-5. **Python side still has no automated tests.** Correctness there still
-   rests on the inline `_validate_columns` header check (§2.2) and the
-   unmatched-county-name warning (§2.3) — both runtime, data-dependent
-   checks, not a test suite that runs independent of having the real
-   multi-GB dataset on disk. The R side no longer shares this gap: `duboisR/`
-   has a `tests/testthat/` suite (96 tests as of this writing) covering
-   every exported function against synthetic fixtures, including a
-   parameter-recovery test for the Threshold Test approximation (§3.0) and
-   hand-verified daylight/dark/twilight classifications for the Veil of
-   Darkness test — none of it depends on the real 650MB dataset being
-   present.
-6. ~~The Veil of Darkness and Threshold Test functions aren't exposed in the
-   Shiny UI yet~~ **Fixed, both.** `r_dashboard/R/mod_veil_of_darkness.R` and
-   `R/mod_threshold_test.R` are new dedicated modules/tabs (same
-   `*_module_ui`/`*_module_server` pattern as §3.2) calling
-   `duboisR::veil_of_darkness_test()` and
-   `duboisR::aggregate_sufficient_statistics()` + `fit_threshold_test()`
-   directly — neither is a sidebar checkbox layer, since both are their own
-   models (VoD: race + `is_dark` + `factor(hour)`, restricted to
-   intertwilight hours; Threshold Test: per-race Beta risk-distribution
-   parameters fit from county-level sufficient statistics) rather than
-   covariates on the main regression's formula. Both reuse the app's
-   existing `stops_data()` reactive and their package's own `plot.*()` S3
-   method. Two real issues surfaced wiring these up against the full
-   5.6M-row dataset, both now fixed:
-   - `plot.duboisR_threshold_fit()`'s fitted curve spans its full
-     theoretical `[0, 1]` search-rate domain by construction (as the sweep
-     variable `t` ranges over `(0.001, 0.999)`), while real per-county search
-     rates never exceed ~13% — left unclamped, ggplot's default axis
-     autoscaling squeezed every actual data point into a sliver against the
-     left edge. Now `coord_cartesian(xlim = c(0, observed_max_x * 1.1))`
-     zooms the viewport to where the data actually is; this only affects
-     what's rendered, not the curve's underlying computation.
-   - Also discovered, not fixed by this change: for a race whose fitted
-     `(a, b)` are extremely large (the real "white" fit is ~1.9×10⁸,
-     ~2×10⁸ — a near point-mass risk distribution), `predicted_hit_rate`
-     comes back numerically `NaN` across the entire observed search-rate
-     range, so that race's curve is invisible even after the axis fix — not
-     an axis problem, a genuine numerical edge case in the unconstrained
-     `optim()` fit. Fixing that would mean touching the fitting/curve-sampling
-     methodology itself (regularization, reparameterization, non-uniform
-     `t` sampling), which wasn't in scope for this pass; `mod_threshold_test.R`
-     instead surfaces it as an explicit UI note (`a`/`b` > 1e6 flagged
-     alongside nonzero `convergence_code`) rather than hiding it.
-7. **`subpopulation_disparities()` silently returned all-`NA`/`NaN` rows
-   against the real dataset** — found while wiring `mod_subpop_disparities.R`
-   (§3.2's sibling for the new "Subpopulation Disparities" tab, which scores
-   the same `audit_fit()` reactive shown on the Regression Model tab, shared
-   via `app.R`'s `server()` same as `stops_data()`). Root cause:
-   `search_conducted` is `NA` (not `FALSE`) for ~38% of the real Texas
-   dataset — Stanford's data simply doesn't report the outcome for a chunk
-   of stops, a fact not documented anywhere before this. `glm()` already
-   silently drops those rows via its default `na.action = na.omit` when
-   *fitting*, but `subpopulation_disparities()` scores against the
-   caller-supplied `data` independently of the model's training frame, so an
-   `NA` there poisoned every group's confusion-matrix `sum()`/`mean()`
-   (default `na.rm = FALSE`). Fixed in `duboisR/R/subpop_disparities.R` by
-   dropping `NA`-outcome rows before scoring, with the drop count surfaced in
-   the returned `"notes"` attribute; covered by a new regression test
-   (`test-subpop_disparities.R`). Separately, the function's `threshold`
-   parameter defaults to `0.5`, which is degenerate for an outcome this
-   imbalanced (predicted probabilities for `search_conducted` top out
-   around 3%) — every row predicts negative, so TPR/PPV come back `NaN` (0/0)
-   regardless of the NA fix. `mod_subpop_disparities.R` doesn't hardcode
-   `0.5`; it defaults a sidebar-adjacent slider to the outcome's own observed
-   base rate (a standard, non-ideological default for an imbalanced binary
-   threshold classifier) and lets the researcher move off it. The tab also
-   flags a subtler artifact live: if the currently-checked sidebar controls
-   leave the model's only predictors as `subject_race`/`subject_sex` — the
-   exact columns these subgroups are defined by — every driver in a subgroup
-   shares one predicted probability, so TPR/FPR come back exactly `0` or `1`
-   per group at any single threshold rather than a real distribution; the UI
-   detects this (via `all.vars(delete.response(terms(audit_fit()$model)))`)
-   and tells the researcher to check more control layers rather than let it
-   read as a bug.
+   `01_fetch_census.py` and `02_clean_stops.py`. If the normalization rule
+   ever needs to change, it has to change in two places in sync, with
+   nothing enforcing that.
+2. **The CSV data contract (§4) is enforced by nothing except code review
+   and `abort_if_missing_cols()`'s existence check.** No schema-validation
+   step catches a column rename or dtype change between the Python output
+   and the R input before it hits `glm()`-fit time (or worse, a dtype
+   coercion that happens to silently succeed).
+3. **Single-state, single-outcome-pair scope.** The README frames this as
+   multi-state; only Texas is wired end-to-end. `duboisR` itself is
+   state-agnostic except one piece: `dubois_tx_centroids()` bundles a
+   Texas-only county centroid table, and nothing in the dashboard exposes
+   swapping the `centroids` argument `compute_daylight_status()` already
+   accepts for exactly this — a second state needs its own centroid table
+   plumbed through by hand.
+4. **Python has no automated test suite**, unlike the R side's 88 tests
+   (§10) — correctness rests on runtime, data-dependent checks rather than
+   an independent harness.
+5. **The Threshold Test's numerical edge case for a near-point-mass risk
+   distribution** (§5.6 — `predicted_hit_rate` comes back `NaN` when a
+   race's fitted `(a, b)` are extremely large) is surfaced in the UI, not
+   fixed. Fixing it means touching the fitting methodology itself
+   (regularization, reparameterization, non-uniform sampling of the sweep
+   variable), out of scope for the pass that found it.
+6. **No `renv` lockfile** for either R project — dependencies are
+   version-unpinned beyond what's declared in `DESCRIPTION`'s `Imports`,
+   so a fresh install can in principle resolve different transitive
+   versions than what this was built and tested against.
