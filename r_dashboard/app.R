@@ -34,8 +34,8 @@ library(tidyverse)
 
 source("R/mod_regression.R")
 source("R/mod_veil_of_darkness.R")
+source("R/mod_threshold_test.R")
 # source("R/mod_datasheet.R")
-# source("R/mod_threshold_test.R")
 # source("R/mod_subpop_disparities.R")
 
 DATA_PATH <- "../data/processed/audit_ready_stops.csv"
@@ -74,8 +74,8 @@ ui <- page_sidebar(
     navset_card_tab(
       title = "Adjusted Odds Ratios",
       nav_panel("Regression Model", regression_module_ui("regression")),
-      nav_panel("Veil of Darkness", veil_module_ui("veil"))
-      # nav_panel("Threshold Test", threshold_module_ui("threshold")),
+      nav_panel("Veil of Darkness", veil_module_ui("veil")),
+      nav_panel("Threshold Test", threshold_module_ui("threshold"))
       # nav_panel("Subpopulation Disparities", subpop_module_ui("subpop")),
       # nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance"))
     )
@@ -126,7 +126,7 @@ server <- function(input, output, session) {
     controls_selected = reactive(input$controls),
     results_dir = RESULTS_DIR
   )
-  # threshold_module_server("threshold", stops_data = stops_data)
+  threshold_module_server("threshold", results_dir = RESULTS_DIR)
   # subpop_module_server(
   #   "subpop",
   #   stops_data = stops_data,

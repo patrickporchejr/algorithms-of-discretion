@@ -9,7 +9,13 @@
 # the Regression Model tab, this always models search_conducted /
 # contraband_found regardless of the sidebar's "Target Outcome" dropdown --
 # that pairing is the Threshold Test's own methodology, not a swappable
-# outcome.
+# outcome. The sidebar's intersectional controls don't apply here either --
+# this is a search-rate/hit-rate risk-distribution fit per (race, county)
+# cell, not a regression with covariates to layer onto.
+#
+# There is exactly one cached results/threshold_test.rds artifact (see
+# duboisR/inst/scripts/precompute_audit.R) -- no live-fallback branch like
+# Regression/Veil need, since nothing in the sidebar varies this fit.
 
 threshold_module_ui <- function(id) {
   ns <- NS(id)
@@ -23,11 +29,12 @@ threshold_module_ui <- function(id) {
   )
 }
 
-threshold_module_server <- function(id, stops_data) {
+threshold_module_server <- function(id, results_dir) {
   moduleServer(id, function(input, output, session) {
     threshold_fit <- reactive({
-      suff_stats <- duboisR::aggregate_sufficient_statistics(stops_data())
-      duboisR::fit_threshold_test(suff_stats)
+      path <- file.path(results_dir, "threshold_test.rds")
+      validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
+      readRDS(path)
     })
 
     output$threshold_plot <- renderPlot({

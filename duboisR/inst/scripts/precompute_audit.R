@@ -68,4 +68,12 @@ for (outcome in OUTCOMES) {
   saveRDS(vod_fit, file.path(RESULTS_DIR, paste0("veil_", outcome, ".rds")))
 }
 
+cat("Fitting Threshold Test...\n")
+# Unlike Regression/Veil, this always models search_conducted/contraband_found
+# together -- it isn't parameterized by the sidebar's outcome or controls at
+# all, so there's exactly one artifact, no per-outcome/per-control variants.
+suff_stats <- aggregate_sufficient_statistics(stops_data)
+threshold_fit <- fit_threshold_test(suff_stats)
+saveRDS(threshold_fit, file.path(RESULTS_DIR, "threshold_test.rds"))
+
 cat("Done. Wrote", length(list.files(RESULTS_DIR)), "artifacts to", RESULTS_DIR, "/\n")
