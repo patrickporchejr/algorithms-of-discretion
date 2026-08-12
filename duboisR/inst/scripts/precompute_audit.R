@@ -76,4 +76,51 @@ suff_stats <- aggregate_sufficient_statistics(stops_data)
 threshold_fit <- fit_threshold_test(suff_stats)
 saveRDS(threshold_fit, file.path(RESULTS_DIR, "threshold_test.rds"))
 
+cat("Computing dataset composition...\n")
+# Same shape as Threshold Test: fixed, not parameterized by any sidebar
+# input, so one cached artifact.
+composition <- audit_composition(stops_data, group_col = "subject_race", missing_col = "contraband_found")
+saveRDS(composition, file.path(RESULTS_DIR, "composition.rds"))
+
+cat("Running identity-proxy check (subject_race ~ county_fips + poverty_rate + median_income + hour)...\n")
+# check_proxies(method = "rf") on the FULL 5.6M-row dataset takes ~18min
+# (verified) for a result within 0.1 accuracy points of a 300k-row sample
+# (67.9% vs. 68.0%, 20.8 vs. 20.9-point lift) -- not worth 18min of `make
+# results` for that difference, so this uses a fixed-seed sample instead.
+set.seed(20240101)
+proxy_sample <- stops_data[sample(nrow(stops_data), 300000), ]
+proxy_sample$county_fips <- as.character(proxy_sample$county_fips)
+identity_proxies <- check_proxies(
+  proxy_sample, protected_attr = "subject_race",
+  predictors = c("county_fips", "poverty_rate", "median_income", "hour"),
+  method = "rf", test_prop = 0.2, seed = 1
+)
+saveRDS(identity_proxies, file.path(RESULTS_DIR, "identity_proxies.rds"))
+
+cat("Classifying outcome variables as tendentious...\n")
+# check_tendentious() doesn't touch the data -- it's a researcher
+# classification, not a statistic -- so this is instant. Both outcomes are
+# classified as administrative (officer discretion), not objective ground
+# truth: see the rationale strings below, which are what
+# duboisR::format.duboisR_tendentious_check() renders on the dashboard.
+tendentious_checks <- list(
+  search_conducted = check_tendentious(
+    "search_conducted", classification = "administrative", interactive = FALSE,
+    rationale = paste(
+      "An officer's discretionary decision to search, not an objective",
+      "measurement of what a driver was carrying."
+    )
+  ),
+  contraband_found = check_tendentious(
+    "contraband_found", classification = "administrative", interactive = FALSE,
+    rationale = paste(
+      "Structurally NA unless a search happened, and the decision to search",
+      "is itself administrative discretion -- so this outcome inherits the",
+      "same selection bias as search_conducted, on top of whatever the",
+      "search itself finds."
+    )
+  )
+)
+saveRDS(tendentious_checks, file.path(RESULTS_DIR, "tendentious_checks.rds"))
+
 cat("Done. Wrote", length(list.files(RESULTS_DIR)), "artifacts to", RESULTS_DIR, "/\n")

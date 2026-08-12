@@ -93,3 +93,13 @@ print.duboisR_tendentious_check <- function(x, ...) {
   if (!is.null(x$rationale)) cli::cli_text("Rationale: {x$rationale}")
   invisible(x)
 }
+
+#' @export
+format.duboisR_tendentious_check <- function(x, ...) {
+  c(
+    sprintf("**%s**: classified as *%s*.", x$variable_name, x$classification),
+    "",
+    x$message,
+    if (!is.null(x$rationale)) c("", sprintf("Rationale: %s", x$rationale))
+  )
+}

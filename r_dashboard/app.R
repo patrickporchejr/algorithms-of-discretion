@@ -36,7 +36,7 @@ source("R/mod_regression.R")
 source("R/mod_veil_of_darkness.R")
 source("R/mod_threshold_test.R")
 source("R/mod_subpop_disparities.R")
-# source("R/mod_datasheet.R")
+source("R/mod_datasheet.R")
 
 DATA_PATH <- "../data/processed/audit_ready_stops.csv"
 RESULTS_DIR <- "../results"
@@ -83,15 +83,15 @@ ui <- page_sidebar(
       nav_panel("Regression Model", regression_module_ui("regression")),
       nav_panel("Veil of Darkness", veil_module_ui("veil")),
       nav_panel("Threshold Test", threshold_module_ui("threshold")),
-      nav_panel("Subpopulation Disparities", subpop_module_ui("subpop"))
-      # nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance"))
+      nav_panel("Subpopulation Disparities", subpop_module_ui("subpop")),
+      nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance"))
     )
   )
 )
 
 server <- function(input, output, session) {
-  # Loaded lazily -- only actually read when a live fit is needed (see
-  # audit_fit() below) or by the future Data Transparency & Provenance tab.
+  # Loaded lazily -- only actually read when live_audit_fit() needs it
+  # (controls selected on Regression, or Subpopulation Disparities).
   stops_data <- reactive({
     validate(need(file.exists(DATA_PATH), "No processed dataset yet — run `make all` first."))
     d <- readr::read_csv(DATA_PATH, show_col_types = FALSE)
@@ -146,7 +146,7 @@ server <- function(input, output, session) {
     audit_fit = live_audit_fit,
     outcome_var = reactive(input$outcome_var)
   )
-  # datasheet_module_server("provenance", stops_data = stops_data, data_path = DATA_PATH)
+  datasheet_module_server("provenance", results_dir = RESULTS_DIR, data_path = DATA_PATH)
 }
 
 shinyApp(ui = ui, server = server)

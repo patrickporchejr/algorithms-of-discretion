@@ -38,3 +38,67 @@ test_that("read_datasheet parses the example fixture correctly", {
   expect_equal(res$motivation$purpose, "To audit racial disparities in Texas traffic stops using the Wells-Du Bois Protocol.")
   expect_equal(res$composition$sensitive_data, "Yes -- race and sex are sensitive attributes.")
 })
+
+test_that("seed_datasheet_answers creates a new file when none exists", {
+  tmp <- withr::local_tempdir()
+  path <- file.path(tmp, "datasheet.json")
+  seed_datasheet_answers(list(motivation = list(purpose = "Demo purpose.")), path = path)
+  res <- read_datasheet(path)
+  expect_equal(res$motivation$purpose, "Demo purpose.")
+})
+
+test_that("seed_datasheet_answers fills blanks but does not clobber an existing answer by default", {
+  tmp <- withr::local_tempdir()
+  path <- file.path(tmp, "datasheet.json")
+  seed_datasheet_answers(list(motivation = list(purpose = "Original.", funder = "Nobody.")), path = path)
+
+  seed_datasheet_answers(list(motivation = list(purpose = "Overwritten?", funder = "Somebody.")), path = path)
+  res <- read_datasheet(path)
+  expect_equal(res$motivation$purpose, "Original.")
+  expect_equal(res$motivation$funder, "Nobody.")
+})
+
+test_that("seed_datasheet_answers fills a genuinely blank question even when the section already exists", {
+  tmp <- withr::local_tempdir()
+  path <- file.path(tmp, "datasheet.json")
+  seed_datasheet_answers(list(motivation = list(purpose = "Original.")), path = path)
+
+  seed_datasheet_answers(list(motivation = list(funder = "Filled in later.")), path = path)
+  res <- read_datasheet(path)
+  expect_equal(res$motivation$purpose, "Original.")
+  expect_equal(res$motivation$funder, "Filled in later.")
+})
+
+test_that("seed_datasheet_answers overwrites existing answers when overwrite_existing = TRUE", {
+  tmp <- withr::local_tempdir()
+  path <- file.path(tmp, "datasheet.json")
+  seed_datasheet_answers(list(motivation = list(purpose = "Original.")), path = path)
+
+  seed_datasheet_answers(list(motivation = list(purpose = "Replaced.")), path = path, overwrite_existing = TRUE)
+  res <- read_datasheet(path)
+  expect_equal(res$motivation$purpose, "Replaced.")
+})
+
+test_that("datasheet_schema returns the same section/question keys seed_datasheet_answers validates against", {
+  schema <- datasheet_schema()
+  expect_true(all(c("motivation", "composition", "uses", "maintenance") %in% names(schema)))
+  expect_equal(schema$motivation$title, "Motivation")
+  expect_true("purpose" %in% names(schema$motivation$questions))
+  expect_type(schema$motivation$questions[["purpose"]], "character")
+})
+
+test_that("seed_datasheet_answers warns and skips unrecognized section/question keys", {
+  tmp <- withr::local_tempdir()
+  path <- file.path(tmp, "datasheet.json")
+  expect_warning(
+    seed_datasheet_answers(list(not_a_real_section = list(x = "y")), path = path),
+    "not a known datasheet section"
+  )
+  expect_warning(
+    seed_datasheet_answers(list(motivation = list(not_a_real_question = "y")), path = path),
+    "not a known datasheet question"
+  )
+  res <- read_datasheet(path)
+  expect_null(res$not_a_real_section)
+  expect_null(res$motivation$not_a_real_question)
+})

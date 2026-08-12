@@ -29,3 +29,18 @@ test_that("check_tendentious carries a rationale through when supplied", {
                             rationale = "officer discretion", interactive = FALSE)
   expect_equal(res$rationale, "officer discretion")
 })
+
+test_that("format.duboisR_tendentious_check includes the classification, message, and rationale", {
+  res <- check_tendentious("search_conducted", classification = "administrative",
+                            rationale = "officer discretion", interactive = FALSE)
+  out <- format(res)
+  expect_true(any(grepl("administrative", out)))
+  expect_true(any(grepl("officer discretion", out)))
+  expect_true(any(grepl(res$message, out, fixed = TRUE)))
+})
+
+test_that("format.duboisR_tendentious_check omits the rationale line when none was given", {
+  res <- check_tendentious("speed_radar_reading", classification = "objective", interactive = FALSE)
+  out <- format(res)
+  expect_false(any(grepl("Rationale:", out)))
+})

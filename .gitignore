@@ -3,6 +3,12 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+# ...except the datasheet: authored/curated content (seeded via
+# duboisR/inst/scripts/seed_demo_datasheet.R, edited by hand or via
+# duboisR::build_datasheet_wizard() from there), not a regenerable derived
+# artifact like the multi-GB CSVs above -- worth tracking so it survives a
+# fresh clone.
+!data/processed/datasheet.json
 
 # precomputed audit artifacts (regenerate via `make results`; revisit
 # whether to commit these once we're deploying the demo -- they're small
