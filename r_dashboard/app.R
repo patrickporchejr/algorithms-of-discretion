@@ -37,6 +37,7 @@ source("R/mod_veil_of_darkness.R")
 source("R/mod_threshold_test.R")
 source("R/mod_subpop_disparities.R")
 source("R/mod_datasheet.R")
+source("R/mod_grounding_experiment.R")
 
 DATA_PATH <- "../data/processed/audit_ready_stops.csv"
 RESULTS_DIR <- "../results"
@@ -84,7 +85,8 @@ ui <- page_sidebar(
       nav_panel("Veil of Darkness", veil_module_ui("veil")),
       nav_panel("Threshold Test", threshold_module_ui("threshold")),
       nav_panel("Subpopulation Disparities", subpop_module_ui("subpop")),
-      nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance"))
+      nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance")),
+      nav_panel("LLM Grounding Test", grounding_module_ui("grounding"))
     )
   )
 )
@@ -147,6 +149,7 @@ server <- function(input, output, session) {
     outcome_var = reactive(input$outcome_var)
   )
   datasheet_module_server("provenance", results_dir = RESULTS_DIR, data_path = DATA_PATH)
+  grounding_module_server("grounding", results_dir = RESULTS_DIR)
 }
 
 shinyApp(ui = ui, server = server)

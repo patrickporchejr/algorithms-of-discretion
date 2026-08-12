@@ -69,12 +69,12 @@ Administrative datasets reflect institutional policing practices rather than raw
 ├── duboisR/                 # R package: the Wells-Du Bois Protocol diagnostic engine
 │   ├── R/                   # glm_utils, veil_of_darkness, threshold_test, datasheet, ...
 │   ├── inst/extdata/        # bundled TX county centroids (Veil of Darkness geodata)
-│   ├── inst/scripts/        # precompute_audit.R -- the CLI that populates results/
+│   ├── inst/scripts/        # precompute_audit.R (populates results/), run_grounding_experiment.R (opt-in, `make grounding`)
 │   ├── inst/templates/      # datasheet.md/.qmd scaffolding templates
 │   ├── tests/testthat/      # unit + parameter-recovery tests
 │   └── vignettes/           # theoretical grounding (QuantCrit, Du Bois, Wells)
 ├── r_dashboard/             # Shiny app: renders results/*.rds (consumes duboisR)
-│   ├── R/                   # Shiny modules (regression, veil of darkness, threshold test, subpop disparities, data transparency)
+│   ├── R/                   # Shiny modules (regression, veil of darkness, threshold test, subpop disparities, data transparency, llm grounding test)
 │   └── www/                 # CSS/static assets
 ├── notebooks/                # Scratch EDA, not pipeline code
 └── paper/                   # Quarto white paper (added once findings exist)
@@ -99,8 +99,8 @@ Rscript -e 'devtools::install("duboisR")'
 # 2. Python env
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# 3. Get a free Census API key (https://api.census.gov/data/key_signup.html)
-#    and put it in a repo-root .env file: CENSUS_API_KEY=your_key_here
+# 3. cp .env.example .env, then get a free Census API key
+#    (https://api.census.gov/data/key_signup.html) and set CENSUS_API_KEY
 
 # 4. Download the raw Texas State Patrol CSV (~1GB zipped, ~7.2GB unzipped —
 #    the pipeline reads directly from the .zip, no need to unzip by hand)
@@ -117,6 +117,59 @@ make results   # -> results/*.rds (~2min, mostly Veil of Darkness's sunset/dusk 
 # 6. Run the app -- it renders results/*.rds, it does not fit models live
 cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 ```
+
+### LLM Grounding Test (optional)
+
+The dashboard's "LLM Grounding Test" tab asks a flagship LLM the same fixed
+battery of boolean/multiple-choice/numeric questions about the dataset
+twice per trial — once given only a compact, pseudonymized description of
+the data ("naive"), once given the same description plus an explicit
+instruction to read `datasheet.json` first ("grounded") — and scores both
+against hand-authored expected answers, so the value of the datasheet is
+shown empirically rather than asserted (see
+`duboisR::run_grounding_experiment()`). Each answer also carries a
+self-reported confidence score, and every condition runs `N_REPEATS = 2`
+independent trials (set at the top of the script below) so the report is a
+majority-vote answer plus a stability rate, not a single noisy draw — see
+`duboisR::summarize_grounding_trials()`.
+
+It's **not** part of `make all`/`make results`: it makes real, billed LLM
+API calls and needs provider credentials, so it has its own opt-in target.
+
+```bash
+# Set at least one of these in your .env (see .env.example) -- every
+# provider with a key set gets run and compared:
+#   ANTHROPIC_API_KEY=your_key_here
+#   OPENAI_API_KEY=your_key_here
+#   GEMINI_API_KEY=your_key_here
+#   XAI_API_KEY=your_key_here
+
+make grounding   # -> results/grounding_experiment.rds
+```
+
+If none are set, that dashboard tab just shows a message pointing here
+instead of erroring — everything else in the app works without it.
+
+**Approximate cost per `make grounding` run** (all 4 providers, 2 trials
+each, list pricing as of 2026-08-12 — check each provider's current pricing
+page, since it moves fast). Measured against the real dataset/datasheet: a
+naive-condition call is ~7.6K input / ~0.7K output tokens, grounded is
+~10.1K input / ~1.1K output (grounded costs more mainly because
+`datasheet.json` itself is embedded in the prompt). At `N_REPEATS = 2`, one
+provider makes 4 calls total (2 conditions × 2 trials):
+
+| Provider | Model | $/1M in | $/1M out | Cost per provider run |
+|---|---|---|---|---|
+| Anthropic | `claude-opus-5` | $5.00 | $25.00 | ~$0.27 |
+| OpenAI | `gpt-5.1` | $1.25 | $10.00 | ~$0.08 |
+| Gemini | `gemini-3.1-pro-preview` | $2.00 | $12.00 | ~$0.11 |
+| xAI | `grok-4.6` | $2.00 | $6.00 | ~$0.09 |
+| **All 4 providers** | | | | **~$0.55** |
+
+With only `ANTHROPIC_API_KEY` set (the cheapest way to try it), a run costs
+about $0.27. Set `N_REPEATS <- 1` in
+`duboisR/inst/scripts/run_grounding_experiment.R` to roughly halve every
+figure above, at the cost of losing the stability/majority-vote signal.
 
 `make clean` removes every generated file (`data/raw/census_stratifiers.csv`,
 `data/processed/*.csv`, `results/`) so you can rebuild from scratch; it does

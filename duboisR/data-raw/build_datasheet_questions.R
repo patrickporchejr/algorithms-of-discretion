@@ -9,6 +9,13 @@
 # questions explicitly cross-referencing duboisR's own diagnostic
 # functions (audit_composition(), check_proxies(), check_tendentious())
 # per the source feedback document's integration proposal.
+#
+# usethis::use_data(internal = TRUE) overwrites the *entire* sysdata.rda
+# with only the objects named in its call -- it doesn't merge with what's
+# already there. Load the existing internal objects (grounding_questions_list,
+# from build_grounding_questions.R) first so this run doesn't silently
+# delete them.
+if (file.exists("R/sysdata.rda")) load("R/sysdata.rda")
 
 datasheet_questions <- list(
   motivation = list(
@@ -71,7 +78,11 @@ datasheet_questions <- list(
   )
 )
 
-usethis::use_data(datasheet_questions, internal = TRUE, overwrite = TRUE)
+if (exists("grounding_questions_list")) {
+  usethis::use_data(datasheet_questions, grounding_questions_list, internal = TRUE, overwrite = TRUE)
+} else {
+  usethis::use_data(datasheet_questions, internal = TRUE, overwrite = TRUE)
+}
 
 render_datasheet_body <- function(questions) {
   sections <- vapply(questions, function(sec) {

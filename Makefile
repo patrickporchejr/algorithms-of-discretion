@@ -8,7 +8,9 @@ AUDIT_READY := data/processed/audit_ready_stops.csv
 PRECOMPUTE_SCRIPT := duboisR/inst/scripts/precompute_audit.R
 RESULTS_STAMP := results/.stamp
 
-.PHONY: all data results clean
+GROUNDING_SCRIPT := duboisR/inst/scripts/run_grounding_experiment.R
+
+.PHONY: all data results grounding clean
 
 all: results
 
@@ -32,6 +34,13 @@ results: $(RESULTS_STAMP)
 $(RESULTS_STAMP): $(PRECOMPUTE_SCRIPT) $(AUDIT_READY) $(wildcard duboisR/R/*.R)
 	Rscript $(PRECOMPUTE_SCRIPT)
 	touch $(RESULTS_STAMP)
+
+# Opt-in, not part of `all`/`results`: makes real, billed LLM API calls and
+# needs ANTHROPIC_API_KEY/OPENAI_API_KEY in .env (see README). Always reruns
+# rather than tracking a timestamp, since re-running is itself sometimes the
+# point (checking a model's answers haven't drifted).
+grounding: $(AUDIT_READY)
+	Rscript $(GROUNDING_SCRIPT)
 
 clean:
 	rm -f $(CENSUS_RAW) $(STOPS_CLEAN) $(AUDIT_READY)

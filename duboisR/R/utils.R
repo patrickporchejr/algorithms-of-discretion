@@ -17,11 +17,16 @@ md_table <- function(df, digits = 3) {
     return(paste0("_(no rows)_"))
   }
   fmt_col <- function(x) {
-    if (is.numeric(x)) {
+    out <- if (is.numeric(x)) {
       format(round(x, digits), trim = TRUE, scientific = FALSE)
     } else {
       as.character(x)
     }
+    # as.character()/format() both propagate NA as a genuine NA rather than
+    # the string "NA" -- nchar(NA) is itself NA, which breaks the width
+    # computation below. Make missing values an explicit, printable "NA".
+    out[is.na(out)] <- "NA"
+    out
   }
   cols <- names(df)
   body <- lapply(df, fmt_col)
