@@ -5,9 +5,23 @@
 # restricted to intertwilight clock hours so the comparison isn't confounded
 # by clock-time commuting patterns. The statistical core (sunset/dusk lookups
 # via suncalc, the intertwilight restriction, the GLM fit) all lives in
-# duboisR::veil_of_darkness_test(); this module is a thin reactive wrapper,
-# same pattern as mod_regression.R. The forest plot reuses the package's own
-# plot.duboisR_vod_result() S3 method rather than re-implementing it here.
+# duboisR. The forest plot reuses the package's own plot.duboisR_vod_result()
+# S3 method rather than re-implementing it here.
+#
+# fit_veil_of_darkness() was called with interaction = TRUE when this was
+# precomputed: the Grogger & Ridgeway hypothesis is specifically that the
+# RACIAL DISPARITY shrinks once officers can't see race well, which only an
+# interaction term (race x is_dark) can test. An additive-only model can
+# show "race matters" and "darkness matters" separately but structurally
+# cannot show whether darkness changes the racial disparity -- i.e. it
+# cannot test the actual hypothesis this tab is named after.
+#
+# This module reads a precomputed results/veil_*.rds artifact (see
+# duboisR/inst/scripts/precompute_audit.R) rather than fitting live --
+# prepare_veil_of_darkness_data() takes ~2min over the full dataset (the
+# daylight/dark classification, not the fit itself), and the dataset is a
+# frozen pull, so there's no reason to pay that per session. Only which
+# outcome's cached artifact to load reacts to outcome_var.
 
 veil_module_ui <- function(id) {
   ns <- NS(id)
@@ -18,10 +32,12 @@ veil_module_ui <- function(id) {
   )
 }
 
-veil_module_server <- function(id, stops_data, outcome_var) {
+veil_module_server <- function(id, outcome_var, results_dir) {
   moduleServer(id, function(input, output, session) {
     vod_fit <- reactive({
-      duboisR::veil_of_darkness_test(stops_data(), outcome_var = outcome_var())
+      path <- file.path(results_dir, paste0("veil_", outcome_var(), ".rds"))
+      validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
+      readRDS(path)
     })
 
     output$vod_plot <- renderPlot({

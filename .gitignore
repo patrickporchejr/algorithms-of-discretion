@@ -4,6 +4,11 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# precomputed audit artifacts (regenerate via `make results`; revisit
+# whether to commit these once we're deploying the demo -- they're small
+# relative to data/, unlike the raw/processed CSVs)
+results/
+
 # python
 __pycache__/
 *.pyc

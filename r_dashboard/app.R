@@ -1,8 +1,11 @@
 # Algorithms of Discretion — Shiny audit dashboard
 #
-# Expects ../data/processed/audit_ready_stops.csv, produced by the Python
-# pipeline (python/01-03) against Texas State Patrol (Stanford Open Policing)
-# + ACS county data. See README for the real-data setup.
+# Expects results/regression_*.rds and results/veil_*.rds, produced by
+# `make results` (which chains the Python data pipeline and then
+# duboisR/inst/scripts/precompute_audit.R). The dataset is a frozen pull, so
+# this app renders precomputed model fits rather than fitting live -- see
+# that script and the module files for what's cached and why. See the
+# README for the full pipeline setup.
 
 # macOS defaults bitmapType to "quartz", which needs an active window-server
 # session. When the app runs from a background/non-interactive process
@@ -30,12 +33,13 @@ library(bslib)
 library(tidyverse)
 
 source("R/mod_regression.R")
-source("R/mod_datasheet.R")
 source("R/mod_veil_of_darkness.R")
-source("R/mod_threshold_test.R")
-source("R/mod_subpop_disparities.R")
+# source("R/mod_datasheet.R")
+# source("R/mod_threshold_test.R")
+# source("R/mod_subpop_disparities.R")
 
 DATA_PATH <- "../data/processed/audit_ready_stops.csv"
+RESULTS_DIR <- "../results"
 
 ui <- page_sidebar(
   theme = bs_theme(bootswatch = "litera", primary = "#2C3E50"),
@@ -50,16 +54,16 @@ ui <- page_sidebar(
         "Contraband Found" = "contraband_found"
       )
     ),
-    checkboxGroupInput(
-      "controls", "Layer Intersectional Controls:",
-      choices = c(
-        "Driver Sex" = "demographics",
-        "County Poverty Rate" = "poverty",
-        "County Median Income" = "income",
-        "Time of Day" = "time"
-      ),
-      selected = c("demographics")
-    ),
+    # checkboxGroupInput(
+    #   "controls", "Layer Intersectional Controls:",
+    #   choices = c(
+    #     "Driver Sex" = "demographics",
+    #     "County Poverty Rate" = "poverty",
+    #     "County Median Income" = "income",
+    #     "Time of Day" = "time"
+    #   ),
+    #   selected = c("demographics")
+    # ),
     helpText(
       "Each layer tests how much raw racial disparity persists after ",
       "accounting for a structural covariate. See the README for what ",
@@ -69,56 +73,57 @@ ui <- page_sidebar(
 
   layout_columns(
     navset_card_tab(
-      title = "Adjusted Odds Ratios (relative to white drivers)",
+      title = "Adjusted Odds Ratios",
       nav_panel("Regression Model", regression_module_ui("regression")),
-      nav_panel("Veil of Darkness", veil_module_ui("veil")),
-      nav_panel("Threshold Test", threshold_module_ui("threshold")),
-      nav_panel("Subpopulation Disparities", subpop_module_ui("subpop")),
-      nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance"))
+      nav_panel("Veil of Darkness", veil_module_ui("veil"))
+      # nav_panel("Threshold Test", threshold_module_ui("threshold")),
+      # nav_panel("Subpopulation Disparities", subpop_module_ui("subpop")),
+      # nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance"))
     )
   )
 )
 
 server <- function(input, output, session) {
-  # Shared across all tabs -- the regression model, veil-of-darkness test,
-  # threshold test, subpopulation disparities, and the provenance tab's live
-  # composition numbers all need the same loaded/releveled data.
+  # Not used by any currently-wired tab -- both Regression and Veil of
+  # Darkness now read precomputed results/*.rds instead. Kept here (lazily;
+  # reactive() doesn't run until called) for the Data Transparency &
+  # Provenance tab, which will need live composition/missingness numbers
+  # over the raw data rather than a cached model fit.
   stops_data <- reactive({
-    validate(need(file.exists(DATA_PATH), "No processed dataset yet — run the Python pipeline first."))
+    validate(need(file.exists(DATA_PATH), "No processed dataset yet — run `make all` first."))
     d <- readr::read_csv(DATA_PATH, show_col_types = FALSE)
     # glm() otherwise picks the reference level alphabetically ("black"),
     # silently contradicting the "relative to white drivers" plot header.
     duboisR::dubois_relevel(d, "subject_race", ref = "white")
   })
 
-  # Also shared -- the Subpopulation Disparities tab scores this SAME fitted
-  # model (not a separate glm() call) so it reads as "how does the
-  # currently-adjusted model perform across subgroups," not a divergent fit.
+  # Reads results/regression_<outcome>.rds (see
+  # duboisR/inst/scripts/precompute_audit.R) rather than fitting live.
+  # Currently only varies by outcome_var -- the intersectional-controls
+  # checkboxes are still off, and the cache only has the no-controls fit per
+  # outcome. Wiring those controls back on will need either precomputing
+  # the specific combinations worth showing, or falling back to a live fit
+  # for combinations that aren't cached.
   audit_fit <- reactive({
-    control_map <- list(
-      demographics = "subject_sex",
-      poverty = "poverty_rate",
-      income = "median_income",
-      time = "factor(hour)"
-    )
-    formula <- duboisR::build_formula(input$outcome_var, "subject_race", control_map, input$controls)
-    duboisR::fit_audit_glm(stops_data(), formula)
+    path <- file.path(RESULTS_DIR, paste0("regression_", input$outcome_var, ".rds"))
+    validate(need(file.exists(path), paste0("No cached result at ", path, " -- run `make results` first.")))
+    readRDS(path)
   })
 
   regression_module_server("regression", audit_fit = audit_fit)
   veil_module_server(
     "veil",
-    stops_data = stops_data,
-    outcome_var = reactive(input$outcome_var)
+    outcome_var = reactive(input$outcome_var),
+    results_dir = RESULTS_DIR
   )
-  threshold_module_server("threshold", stops_data = stops_data)
-  subpop_module_server(
-    "subpop",
-    stops_data = stops_data,
-    audit_fit = audit_fit,
-    outcome_var = reactive(input$outcome_var)
-  )
-  datasheet_module_server("provenance", stops_data = stops_data, data_path = DATA_PATH)
+  # threshold_module_server("threshold", stops_data = stops_data)
+  # subpop_module_server(
+  #   "subpop",
+  #   stops_data = stops_data,
+  #   audit_fit = audit_fit,
+  #   outcome_var = reactive(input$outcome_var)
+  # )
+  # datasheet_module_server("provenance", stops_data = stops_data, data_path = DATA_PATH)
 }
 
 shinyApp(ui = ui, server = server)
