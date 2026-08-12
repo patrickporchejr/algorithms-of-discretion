@@ -44,4 +44,13 @@ see DESIGN.md \eqn{\S}4), each stop's timestamp is assumed to be at the
 top of its recorded hour. This is a real, unavoidable resolution
 limitation given the upstream pipeline, not a choice made for
 convenience here.
+
+The two joins against \code{centroids} and \code{unique_pairs} use \code{match()}
+rather than \code{merge()}: at millions of rows, base \code{merge()}'s
+sort-and-match join measured ~250-800s wall time here (and reorders the
+full result by join key as a side effect), against ~2-15s for the
+equivalent hash-based \code{match()} lookup with row order preserved.
+\code{stop_datetime} is likewise built via \code{ISOdatetime()} on \code{POSIXlt}
+components rather than \code{paste()}-then-\code{as.POSIXct()} string parsing, for
+the same reason (~65s vs. ~125s at this row count).
 }

@@ -34,10 +34,7 @@ Default \code{FALSE}.}
 \item{centroids}{Passed to \code{\link[=compute_daylight_status]{compute_daylight_status()}}.}
 }
 \value{
-A list of class \code{duboisR_vod_result} with \code{model_fit} (a
-\code{duboisR_glm_fit}), \code{diagnostics} (row counts / hours used), and
-\code{caveats} (character vector, always including the nonreporting-
-robustness assumption and the hour-only time-resolution limitation).
+A list of class \code{duboisR_vod_result}; see \code{\link[=fit_veil_of_darkness]{fit_veil_of_darkness()}}.
 }
 \description{
 The Veil of Darkness test evaluates racial profiling in traffic stops by
@@ -48,4 +45,11 @@ restricts the comparison to the \strong{intertwilight period}: clock hours
 that are sometimes daylight and sometimes dark across the data's
 date/county range, controlling for the confound that commuting patterns
 (and thus who is on the road) vary by clock time regardless of race.
+}
+\details{
+A convenience wrapper around \code{\link[=prepare_veil_of_darkness_data]{prepare_veil_of_darkness_data()}} +
+\code{\link[=fit_veil_of_darkness]{fit_veil_of_darkness()}} for one-shot use. Callers that need to refit
+against multiple outcomes against the same data should call those two
+functions directly and reuse the prepared result -- see
+\code{\link[=prepare_veil_of_darkness_data]{prepare_veil_of_darkness_data()}}.
 }

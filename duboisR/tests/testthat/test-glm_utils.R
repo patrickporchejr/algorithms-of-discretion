@@ -56,3 +56,38 @@ test_that("fit_audit_glm exponentiates estimate and CI when requested", {
   expect_equal(row_exp$conf.low, exp(row_log$conf.low), tolerance = 1e-8)
   expect_equal(row_exp$conf.high, exp(row_log$conf.high), tolerance = 1e-8)
 })
+
+test_that("predicted_probabilities returns one row per level, including the reference", {
+  d <- data.frame(subject_race = c("white", "white", "black", "black", "hispanic", "hispanic"))
+  d$search_conducted <- c(0, 0, 1, 1, 0, 1)
+  d <- dubois_relevel(d, "subject_race", ref = "white")
+
+  fit <- fit_audit_glm(d, search_conducted ~ subject_race)
+  out <- predicted_probabilities(fit, d, "subject_race")
+
+  expect_setequal(out$level, c("white", "black", "hispanic"))
+  expect_true(all(out$probability >= 0 & out$probability <= 1))
+  expect_true(all(out$conf.low <= out$probability & out$probability <= out$conf.high))
+})
+
+test_that("predicted_probabilities matches a hand-computed probability at the mean of a numeric control", {
+  set.seed(3)
+  n <- 300
+  d <- data.frame(
+    subject_race = sample(c("white", "black"), n, replace = TRUE),
+    poverty_rate = runif(n, 0.05, 0.30)
+  )
+  d$search_conducted <- rbinom(n, 1, plogis(-2 + 0.8 * (d$subject_race == "black") + 3 * d$poverty_rate))
+  d <- dubois_relevel(d, "subject_race", ref = "white")
+
+  fit <- fit_audit_glm(d, search_conducted ~ subject_race + poverty_rate)
+  out <- predicted_probabilities(fit, d, "subject_race")
+
+  coefs <- stats::coef(fit$model)
+  mean_poverty <- mean(d$poverty_rate)
+  expected_white <- plogis(coefs[["(Intercept)"]] + coefs[["poverty_rate"]] * mean_poverty)
+  expected_black <- plogis(coefs[["(Intercept)"]] + coefs[["subject_raceblack"]] + coefs[["poverty_rate"]] * mean_poverty)
+
+  expect_equal(unname(out$probability[out$level == "white"]), unname(expected_white), tolerance = 1e-8)
+  expect_equal(unname(out$probability[out$level == "black"]), unname(expected_black), tolerance = 1e-8)
+})

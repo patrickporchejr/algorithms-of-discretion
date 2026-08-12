@@ -93,6 +93,60 @@ fit_audit_glm <- function(data, formula, family = "binomial", conf_level = 0.95,
   structure(list(model = model, summary = df), class = "duboisR_glm_fit")
 }
 
+#' Predicted probabilities for each level of a grouping variable
+#'
+#' Complements the reference-category odds ratios in `fit$summary` (each
+#' relative to a baseline level, e.g. "white") with an absolute view: for
+#' every level of `group_var`, the model's predicted probability of the
+#' outcome, holding every other predictor at a reference value (mean for
+#' numeric predictors, the most common observed value for categorical
+#' ones). Unlike odds ratios, this shows every level of `group_var`
+#' directly, including whichever level the model treats as the reference.
+#'
+#' Predictions are built from `data` (not `model.frame(fit$model)`) and
+#' scored via `predict(newdata = ...)` so that formula terms computed from
+#' a raw column (e.g. `factor(hour)`) are re-derived correctly -- passing
+#' the model frame's own `factor(hour)` column back in as `newdata` would
+#' not match the original formula's term.
+#'
+#' @param fit A `duboisR_glm_fit` (from [fit_audit_glm()]).
+#' @param data The data frame `fit` was fitted on.
+#' @param group_var String, the predictor to vary (e.g. `"subject_race"`).
+#' @param conf_level Confidence level for the Wald interval. Default `0.95`.
+#' @return A tibble with columns `level`, `probability`, `conf.low`,
+#'   `conf.high`.
+#' @export
+predicted_probabilities <- function(fit, data, group_var, conf_level = 0.95) {
+  abort_if_missing_cols(data, group_var)
+  model <- fit$model
+
+  predictor_vars <- all.vars(stats::formula(model))[-1]
+  other_vars <- setdiff(predictor_vars, group_var)
+
+  ref_row <- lapply(data[other_vars], function(col) {
+    if (is.numeric(col)) {
+      mean(col, na.rm = TRUE)
+    } else {
+      tab <- table(col)
+      names(tab)[which.max(tab)]
+    }
+  })
+
+  levels_group <- levels(factor(data[[group_var]]))
+  newdata <- as.data.frame(ref_row, stringsAsFactors = FALSE)[rep(1, length(levels_group)), , drop = FALSE]
+  newdata[[group_var]] <- levels_group
+
+  pred <- stats::predict(model, newdata = newdata, type = "link", se.fit = TRUE)
+  z <- stats::qnorm(1 - (1 - conf_level) / 2)
+
+  tibble::tibble(
+    level = levels_group,
+    probability = stats::plogis(pred$fit),
+    conf.low = stats::plogis(pred$fit - z * pred$se.fit),
+    conf.high = stats::plogis(pred$fit + z * pred$se.fit)
+  )
+}
+
 #' @export
 print.duboisR_glm_fit <- function(x, ...) {
   cat(md_table(x$summary), "\n")

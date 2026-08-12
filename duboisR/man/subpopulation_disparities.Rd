@@ -39,9 +39,13 @@ Default \code{0.5}.}
 }
 \value{
 A tibble of class \code{duboisR_subpop_disparities} with columns
-\code{group}, \code{n}, \code{base_rate}, \code{TPR}, \code{FPR}, \code{PPV}, \code{threshold_used}. Has
-an attribute \code{"notes"} documenting the threshold, whether search-only
-filtering was applied, and the fairness-metrics trade-off above.
+\code{group}, \code{n}, \code{base_rate}, \code{TPR}, \code{FPR}, \code{PPV}, \code{threshold_used}. Rows
+with \code{NA} \code{actual_col} are dropped before scoring (administrative data
+commonly leaves the outcome unreported for some rows; an \code{NA} here
+would otherwise poison every group's \code{sum()}/\code{mean()}). Has an
+attribute \code{"notes"} documenting the threshold, whether search-only
+filtering was applied, how many rows were dropped for an \code{NA} outcome
+(if any), and the fairness-metrics trade-off above.
 }
 \description{
 A single accuracy or hit-rate number can hide starkly different error

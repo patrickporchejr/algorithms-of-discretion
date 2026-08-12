@@ -30,6 +30,15 @@ dubois_tx_centroids <- function() {
 #' limitation given the upstream pipeline, not a choice made for
 #' convenience here.
 #'
+#' The two joins against `centroids` and `unique_pairs` use `match()`
+#' rather than `merge()`: at millions of rows, base `merge()`'s
+#' sort-and-match join measured ~250-800s wall time here (and reorders the
+#' full result by join key as a side effect), against ~2-15s for the
+#' equivalent hash-based `match()` lookup with row order preserved.
+#' `stop_datetime` is likewise built via `ISOdatetime()` on `POSIXlt`
+#' components rather than `paste()`-then-`as.POSIXct()` string parsing, for
+#' the same reason (~65s vs. ~125s at this row count).
+#'
 #' @param data A data frame.
 #' @param date_col String column name of the stop date. Default `"date"`.
 #' @param hour_col String column name of the stop hour (integer 0-23).
@@ -49,16 +58,19 @@ compute_daylight_status <- function(data, date_col = "date", hour_col = "hour",
   centroids <- centroids %||% dubois_tx_centroids()
 
   n_before <- nrow(data)
-  data <- merge(data, centroids[c("county_fips", "lat", "lon")],
-                by.x = county_fips_col, by.y = "county_fips", all.x = TRUE)
+  centroid_idx <- match(data[[county_fips_col]], centroids$county_fips)
+  data$lat <- centroids$lat[centroid_idx]
+  data$lon <- centroids$lon[centroid_idx]
   n_unmatched <- sum(is.na(data$lat))
   if (n_unmatched > 0) {
     cli::cli_warn("{n_unmatched} of {n_before} rows have a {county_fips_col} with no centroid match; their light_condition will be NA.")
   }
 
-  data$stop_datetime <- as.POSIXct(
-    paste0(as.character(data[[date_col]]), " ", sprintf("%02d:00:00", data[[hour_col]])),
-    tz = "America/Chicago"
+  date_vals <- as.Date(data[[date_col]])
+  date_parts <- as.POSIXlt(date_vals)
+  data$stop_datetime <- ISOdatetime(
+    date_parts$year + 1900L, date_parts$mon + 1L, date_parts$mday,
+    data[[hour_col]], 0L, 0L, tz = "America/Chicago"
   )
 
   unique_pairs <- unique(data[c(date_col, county_fips_col, "lat", "lon")])
@@ -71,10 +83,10 @@ compute_daylight_status <- function(data, date_col = "date", hour_col = "hour",
   unique_pairs$sunset <- suns$sunset
   unique_pairs$dusk <- suns$dusk
 
-  data <- merge(
-    data, unique_pairs[c(date_col, county_fips_col, "sunset", "dusk")],
-    by = c(date_col, county_fips_col), all.x = TRUE
-  )
+  pair_key <- function(d) paste(d[[date_col]], d[[county_fips_col]])
+  sun_idx <- match(pair_key(data), pair_key(unique_pairs))
+  data$sunset <- unique_pairs$sunset[sun_idx]
+  data$dusk <- unique_pairs$dusk[sun_idx]
 
   data$light_condition <- factor(
     ifelse(is.na(data$sunset), NA_character_,
@@ -89,36 +101,26 @@ compute_daylight_status <- function(data, date_col = "date", hour_col = "hour",
   tibble::as_tibble(data)
 }
 
-#' Fit a Veil of Darkness natural-experiment test
+#' Prepare data for a Veil of Darkness test
 #'
-#' The Veil of Darkness test evaluates racial profiling in traffic stops by
-#' comparing the race distribution of stops made in daylight vs. after dark
-#' — under the hypothesis that officers find it harder to observe a
-#' driver's race at night (Grogger & Ridgeway 2006). This function
-#' restricts the comparison to the **intertwilight period**: clock hours
-#' that are sometimes daylight and sometimes dark across the data's
-#' date/county range, controlling for the confound that commuting patterns
-#' (and thus who is on the road) vary by clock time regardless of race.
+#' Runs the expensive, outcome-independent half of [veil_of_darkness_test()]:
+#' daylight/dark classification (via [compute_daylight_status()]), the
+#' intertwilight-hour restriction, and the race releveling. None of this
+#' depends on `outcome_var`, so callers that need to refit against several
+#' outcomes (e.g. a Shiny reactive keyed on a UI dropdown) can compute this
+#' once and reuse it across [fit_veil_of_darkness()] calls, instead of
+#' repeating the ~2min daylight-classification pass on every refit.
 #'
-#' @param data A data frame.
-#' @param outcome_var String outcome column. Default `"search_conducted"`.
-#' @param date_col,hour_col,county_fips_col Passed to
-#'   [compute_daylight_status()].
-#' @param race_col String race column. Default `"subject_race"`.
-#' @param race_ref String reference level for `race_col`. Default `"white"`.
-#' @param interaction If `TRUE`, include a `race:is_dark` interaction term.
-#'   Default `FALSE`.
-#' @param centroids Passed to [compute_daylight_status()].
-#' @return A list of class `duboisR_vod_result` with `model_fit` (a
-#'   `duboisR_glm_fit`), `diagnostics` (row counts / hours used), and
-#'   `caveats` (character vector, always including the nonreporting-
-#'   robustness assumption and the hour-only time-resolution limitation).
+#' @inheritParams veil_of_darkness_test
+#' @return A list of class `duboisR_vod_prepared` with `fit_data` (the
+#'   intertwilight-restricted, race-releveled data ready to fit), plus the
+#'   diagnostic fields needed to build [fit_veil_of_darkness()]'s output.
 #' @export
-veil_of_darkness_test <- function(data, outcome_var = "search_conducted", date_col = "date",
-                                   hour_col = "hour", county_fips_col = "county_fips",
-                                   race_col = "subject_race", race_ref = "white",
-                                   interaction = FALSE, centroids = NULL) {
-  abort_if_missing_cols(data, c(outcome_var, date_col, hour_col, county_fips_col, race_col))
+prepare_veil_of_darkness_data <- function(data, date_col = "date", hour_col = "hour",
+                                           county_fips_col = "county_fips",
+                                           race_col = "subject_race", race_ref = "white",
+                                           centroids = NULL) {
+  abort_if_missing_cols(data, c(date_col, hour_col, county_fips_col, race_col))
   n_total <- nrow(data)
 
   data <- compute_daylight_status(data, date_col, hour_col, county_fips_col, centroids)
@@ -128,32 +130,67 @@ veil_of_darkness_test <- function(data, outcome_var = "search_conducted", date_c
     lc <- lc[!is.na(lc) & lc != "twilight"]
     length(unique(lc)) > 1
   }, logical(1))
-  intertwilight_hours <- as.integer(names(hours_with_both)[hours_with_both])
+  intertwilight_hours <- sort(as.integer(names(hours_with_both)[hours_with_both]))
 
   n_dropped_twilight <- sum(data$light_condition == "twilight", na.rm = TRUE)
 
   fit_data <- data[!is.na(data$is_dark) & data[[hour_col]] %in% intertwilight_hours, , drop = FALSE]
   fit_data <- dubois_relevel(fit_data, race_col, ref = race_ref)
 
-  base_term <- if (interaction) paste0(race_col, " * is_dark") else paste0(race_col, " + is_dark")
+  structure(
+    list(
+      fit_data = fit_data,
+      hour_col = hour_col,
+      race_col = race_col,
+      intertwilight_hours = intertwilight_hours,
+      n_total = n_total,
+      n_dropped_no_centroid = n_dropped_no_centroid,
+      n_dropped_twilight = n_dropped_twilight
+    ),
+    class = "duboisR_vod_prepared"
+  )
+}
+
+#' Fit a Veil of Darkness test against prepared data
+#'
+#' The cheap, outcome-dependent half of [veil_of_darkness_test()]: builds
+#' the formula and calls [fit_audit_glm()] against `prepared$fit_data`. See
+#' [prepare_veil_of_darkness_data()].
+#'
+#' @param prepared A `duboisR_vod_prepared`, from
+#'   [prepare_veil_of_darkness_data()].
+#' @param outcome_var String outcome column. Default `"search_conducted"`.
+#' @param interaction If `TRUE`, include a `race:is_dark` interaction term.
+#'   Default `FALSE`.
+#' @return A list of class `duboisR_vod_result` with `model_fit` (a
+#'   `duboisR_glm_fit`), `diagnostics` (row counts / hours used), and
+#'   `caveats` (character vector, always including the nonreporting-
+#'   robustness assumption and the hour-only time-resolution limitation).
+#' @export
+fit_veil_of_darkness <- function(prepared, outcome_var = "search_conducted", interaction = FALSE) {
+  base_term <- if (interaction) {
+    paste0(prepared$race_col, " * is_dark")
+  } else {
+    paste0(prepared$race_col, " + is_dark")
+  }
   # A `factor(hour)` term with only one surviving level breaks model.matrix()'s
   # contrasts (needs >= 2 levels), so only include it when the intertwilight
   # restriction has left more than one distinct hour to control for.
-  rhs <- if (length(intertwilight_hours) > 1) {
-    paste(base_term, "+ factor(", hour_col, ")")
+  rhs <- if (length(prepared$intertwilight_hours) > 1) {
+    paste(base_term, "+ factor(", prepared$hour_col, ")")
   } else {
     base_term
   }
   formula <- stats::as.formula(paste(outcome_var, "~", rhs))
-  model_fit <- fit_audit_glm(fit_data, formula)
+  model_fit <- fit_audit_glm(prepared$fit_data, formula)
 
   diagnostics <- list(
-    n_total = n_total,
-    n_dropped_no_centroid = n_dropped_no_centroid,
-    n_dropped_twilight = n_dropped_twilight,
-    n_used = nrow(fit_data),
-    n_intertwilight_hours_used = length(intertwilight_hours),
-    hours_used = sort(intertwilight_hours)
+    n_total = prepared$n_total,
+    n_dropped_no_centroid = prepared$n_dropped_no_centroid,
+    n_dropped_twilight = prepared$n_dropped_twilight,
+    n_used = nrow(prepared$fit_data),
+    n_intertwilight_hours_used = length(prepared$intertwilight_hours),
+    hours_used = prepared$intertwilight_hours
   )
 
   caveats <- c(
@@ -167,13 +204,65 @@ veil_of_darkness_test <- function(data, outcome_var = "search_conducted", date_c
       "Stop times are resolved to the hour only (the pipeline does not carry minutes), ",
       "so daylight/dark classification for stops near sunset/dusk is coarser than the ",
       "underlying astronomical calculation supports."
-    )
+    ),
+    if (interaction) {
+      paste0(
+        "`race:is_dark` terms are the actual Grogger-Ridgeway test: a ratio below 1 means ",
+        "that race's disparity vs. the reference level shrinks after dark, consistent with ",
+        "profiling driven by the officer visually perceiving race. The `race` main-effect ",
+        "terms alone are the daylight-condition disparity, not the overall one."
+      )
+    } else {
+      paste0(
+        "interaction = FALSE: this model fits race and is_dark as separate additive effects, ",
+        "so it cannot show whether the racial disparity itself changes between daylight and ",
+        "dark -- which is what the Grogger-Ridgeway hypothesis actually predicts. Refit with ",
+        "interaction = TRUE (see the `race:is_dark` terms) to test that."
+      )
+    }
   )
 
   structure(
     list(model_fit = model_fit, diagnostics = diagnostics, caveats = caveats),
     class = "duboisR_vod_result"
   )
+}
+
+#' Fit a Veil of Darkness natural-experiment test
+#'
+#' The Veil of Darkness test evaluates racial profiling in traffic stops by
+#' comparing the race distribution of stops made in daylight vs. after dark
+#' — under the hypothesis that officers find it harder to observe a
+#' driver's race at night (Grogger & Ridgeway 2006). This function
+#' restricts the comparison to the **intertwilight period**: clock hours
+#' that are sometimes daylight and sometimes dark across the data's
+#' date/county range, controlling for the confound that commuting patterns
+#' (and thus who is on the road) vary by clock time regardless of race.
+#'
+#' A convenience wrapper around [prepare_veil_of_darkness_data()] +
+#' [fit_veil_of_darkness()] for one-shot use. Callers that need to refit
+#' against multiple outcomes against the same data should call those two
+#' functions directly and reuse the prepared result -- see
+#' [prepare_veil_of_darkness_data()].
+#'
+#' @param data A data frame.
+#' @param outcome_var String outcome column. Default `"search_conducted"`.
+#' @param date_col,hour_col,county_fips_col Passed to
+#'   [compute_daylight_status()].
+#' @param race_col String race column. Default `"subject_race"`.
+#' @param race_ref String reference level for `race_col`. Default `"white"`.
+#' @param interaction If `TRUE`, include a `race:is_dark` interaction term.
+#'   Default `FALSE`.
+#' @param centroids Passed to [compute_daylight_status()].
+#' @return A list of class `duboisR_vod_result`; see [fit_veil_of_darkness()].
+#' @export
+veil_of_darkness_test <- function(data, outcome_var = "search_conducted", date_col = "date",
+                                   hour_col = "hour", county_fips_col = "county_fips",
+                                   race_col = "subject_race", race_ref = "white",
+                                   interaction = FALSE, centroids = NULL) {
+  abort_if_missing_cols(data, c(outcome_var, date_col, hour_col, county_fips_col, race_col))
+  prepared <- prepare_veil_of_darkness_data(data, date_col, hour_col, county_fips_col, race_col, race_ref, centroids)
+  fit_veil_of_darkness(prepared, outcome_var = outcome_var, interaction = interaction)
 }
 
 #' @export
