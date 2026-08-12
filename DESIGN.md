@@ -54,8 +54,9 @@ needs Python's data-wrangling ergonomics.
 
 **R does statistics, packaged as a real library, not scripts.** `duboisR`
 is a proper `DESCRIPTION`/`NAMESPACE`/roxygen2/testthat package — 30
-exported functions, 88 `test_that()` blocks, `devtools::check()` clean (0
-errors/warnings/notes). This matters for a reason beyond code hygiene: a
+exported functions, a full `testthat` suite (see §10 for the current test
+count), `devtools::check()` clean (0 errors/warnings/notes). This matters
+for a reason beyond code hygiene: a
 diagnostic tool for auditing bias has to be independently verifiable. A
 tested, documented, `?help`-able package is falsifiable in a way a pile of
 analysis scripts in a notebook is not — every claim it makes about a
@@ -323,55 +324,27 @@ ability to act on race at all.
 
 The design's key control is the **intertwilight restriction**: rather than
 comparing all daylight stops to all dark stops (confounded by the fact
-that *who's on the road* varies by clock time regardless of race — a 7am
-commute looks nothing like a 7am on a winter morning six months later), the
+that *who's on the road* varies by clock time regardless of race), the
 comparison is restricted to clock hours that are *sometimes* daylight and
-*sometimes* dark across the data's date/county range. `prepare_veil_of_darkness_data()`
-computes this in two stages:
-
-```r
-compute_daylight_status(data, date_col, hour_col, county_fips_col, centroids)
-# joins the bundled 254-row TX county centroid table (dubois_tx_centroids(),
-# sourced from the Census Gazetteer Files) and calls
-# suncalc::getSunlightTimes() vectorized over unique (date, county) pairs —
-# not per-row, which is the difference between this finishing in ~2 minutes
-# and not finishing at all at 5.6M rows.
-```
-
-Two implementation details are worth surfacing because they were measured,
-not assumed: the joins against `centroids` and the unique `(date, county)`
-pairs use `match()` rather than `merge()` — base `merge()`'s sort-and-match
-join measured 250–800s wall time at this row count (and reorders the
-result as a side effect) against 2–15s for the hash-based `match()`
-lookup with row order preserved. `stop_datetime` is built via
-`ISOdatetime()` on `POSIXlt` components rather than `paste()`-then-parse
-string construction, for the same reason (~65s vs. ~125s). Neither is a
-premature optimization — both were the difference between the precompute
-script's Veil of Darkness step finishing in minutes versus not being
-practical to run at all against the real dataset.
-
-Because the data contract only carries an integer `hour` — no minutes —
-every stop's timestamp is assumed to fall at the top of its recorded hour.
-This is a genuine resolution ceiling inherited from the upstream Stanford
-schema, not a shortcut taken here; `fit_veil_of_darkness()`'s output
-carries it as an explicit caveat on every result rather than a silent
-approximation.
+*sometimes* dark across the data's date/county range.
+`prepare_veil_of_darkness_data()` computes this via
+`compute_daylight_status()` — see that function's own docstring for the
+`match()`-vs-`merge()` and `ISOdatetime()`-vs-string-parsing performance
+numbers (the difference between this pass finishing in ~2 minutes and not
+finishing at all at 5.6M rows) and for the hour-only timestamp resolution
+caveat it attaches to every result.
 
 `fit_veil_of_darkness(prepared, outcome_var, interaction)` is the cheap,
 outcome-dependent second stage — split out from the expensive daylight
 classification specifically so a caller refitting against multiple
-outcomes (a Shiny dropdown) pays the ~2-minute classification cost once and
-reuses it. The `interaction` argument matters more than it looks: with
-`interaction = FALSE`, race and `is_dark` enter as separate additive
-effects, which can show "race matters" and "darkness matters" independently
-but cannot show whether the racial disparity itself changes in the dark —
-which is what the Grogger-Ridgeway hypothesis actually claims. Only
-`race:is_dark` (`interaction = TRUE`) tests that: a ratio below 1 on that
-interaction term means the race disparity shrinks after dark, consistent
-with profiling driven by visual identification. `fit_veil_of_darkness()`'s
-returned caveats say exactly this, conditioned on which mode was used, so
-a reader can't mistake an additive fit for a completed test of the
-hypothesis.
+outcomes (a Shiny dropdown) pays that ~2-minute cost once and reuses it.
+The one thing worth stating here rather than leaving entirely to the
+docstring: `interaction = TRUE` (`race:is_dark`) is the actual
+Grogger-Ridgeway test — a ratio below 1 on that term means the race
+disparity shrinks after dark. `interaction = FALSE` fits race and `is_dark`
+as separate additive effects and structurally cannot show that. See
+`?fit_veil_of_darkness` for the full mechanism and the caveats it attaches
+to its own output based on which mode was used.
 
 ### 5.6 Threshold Test (`threshold_test.R`)
 
@@ -386,66 +359,31 @@ carrying contraband. The Threshold Test (Simoiu, Corbett-Davies & Goel
 distribution" as explanations for an observed search/hit-rate pattern.
 
 The full published method is a hierarchical Bayesian model fit via MCMC.
-`duboisR` implements a **fast, non-hierarchical, non-MCMC approximation**,
-deliberately scoped down — a Stan/MCMC dependency and its validation would
-be a multi-week undertaking on its own, disproportionate to what this
-project needs from it (a point estimate to compare against the other
-diagnostics, not a publication-grade Bayesian result). The approximation's
-structure:
+`duboisR` implements a **fast, non-hierarchical, non-MCMC approximation**
+instead — a Stan/MCMC dependency and its validation would be a multi-week
+undertaking disproportionate to what this project needs from it (a point
+estimate to compare against the other diagnostics, not a
+publication-grade Bayesian result). See `?fit_threshold_test` for the
+closed-form derivation that makes it fast: only two numbers per race,
+`(a_r, b_r)`, are actually fit via `stats::optim()`, and each county's
+search threshold falls out of that in closed form from its own observed
+search rate rather than being fit as a free parameter. It's described
+there, deliberately, as "in the spirit of," not "identical to," the cited
+literature — no partial pooling across sparse counties, no credible
+intervals, point estimates only — and validated by
+`test-threshold_test.R`'s parameter-recovery test against data simulated
+from a known `Beta(a, b)`.
 
-1. `aggregate_sufficient_statistics()` collapses millions of stop-level
-   rows into per-(race, county) counts — stop count `n`, search count `S`,
-   hit count `H` (county stands in for "department," since this dataset has
-   no department field).
-2. Each race's searched drivers are modeled as having latent risk
-   `p ~ Beta(a_r, b_r)`, shared across all of that race's counties (the
-   simplification relative to the full hierarchical model, which would let
-   this vary by county too).
-3. The trick that makes this fast: given `(a_r, b_r)`, a county's search
-   threshold isn't a free parameter to fit — it's *derived in closed form*
-   from that county's own observed search rate, `t = qbeta(1 - search_rate,
-   a_r, b_r)`. This is just the inverse-CDF identity
-   `1 - pbeta(t, a, b) == search_rate` read backwards. Only two numbers per
-   race — `(a_r, b_r)` — are actually fit, via `stats::optim()` minimizing
-   weighted squared error between predicted and observed hit rate:
-
-```r
-objective <- function(par) {
-  a <- par[1]; b <- par[2]
-  t <- stats::qbeta(1 - fit_cells$search_rate, a, b)
-  predicted <- .dubois_predicted_hit_rate(t, a, b, fit_cells$search_rate)
-  sum(w * (predicted - fit_cells$hit_rate)^2)
-}
-stats::optim(par = c(a = 1, b = 1), fn = objective, method = "L-BFGS-B",
-             lower = c(1e-3, 1e-3))
-```
-
-where the predicted hit rate under threshold `t` is the conditional mean of
-a Beta above that threshold, `E[p | p > t] = (a/(a+b)) · (1 - pbeta(t, a+1,
-b)) / search_rate` — the denominator is exactly `1 - pbeta(t, a, b)` by
-construction, so it equals `search_rate` and doesn't need to be computed
-separately.
-
-This is explicitly described in the package's own docs as "in the spirit
-of," not "identical to," the cited literature — no partial pooling across
-sparse counties, no credible intervals, point estimates only. It's
-validated the way a from-scratch numerical method should be: parameter
-recovery on data simulated from a known `Beta(a, b)` (`test-threshold_test.R`),
-confirming the `optim()` fit actually recovers the generating parameters
-rather than just converging to *something*.
-
-One real numerical edge case surfaced running this against the actual
-5.6M-row Texas data, documented rather than hidden: the fitted `(a, b)`
-for the "white" race come back extremely large (~1.9×10⁸, ~2×10⁸ — a
-near-point-mass risk distribution), which drives `predicted_hit_rate`
-numerically to `NaN` across the observed range. `plot.duboisR_threshold_fit()`
-also needed `coord_cartesian(xlim = ...)` clamped to the observed data's
-range — the fitted curve's theoretical domain is the full `[0, 1]`, while
-real per-county search rates never exceed ~13%, and ggplot's default
-autoscaling (driven by the curve's extremes) squeezed every real data point
-into a sliver at the left edge without it. `mod_threshold_test.R` surfaces
-the `NaN` case as an explicit UI flag (`a`/`b` > 1e6 alongside a nonzero
-`convergence_code`) rather than silently rendering a blank curve.
+One real numerical edge case, surfaced running this against the actual
+5.6M-row Texas data, is worth naming here since it spans three files: the
+fitted `(a, b)` for the "white" race come back extremely large (~1.9×10⁸,
+~2×10⁸ — a near-point-mass risk distribution), which drives
+`predicted_hit_rate` to `NaN` across the observed range.
+`plot.duboisR_threshold_fit()` clamps its viewport to the observed data's
+range for exactly this reason (the fitted curve's theoretical domain is
+`[0, 1]`, real per-county search rates never exceed ~13%), and
+`mod_threshold_test.R` surfaces the `NaN` case as an explicit UI flag
+rather than silently rendering a blank curve.
 
 ### 5.7 Subpopulation disparities (`subpop_disparities.R`)
 
@@ -500,37 +438,24 @@ run_grounding_experiment(
 )
 ```
 
-Two design choices keep this from being a one-off demo:
+Two design choices keep this from being a one-off demo, each documented in
+full at its own function rather than repeated here: the raw sample is
+pseudonymized before either condition ever sees it (`build_data_context()`)
+specifically so the *naive* condition can't take a shortcut that has
+nothing to do with grounding (e.g. recognizing a real Texas FIPS prefix on
+sight); and every provider call is forced through a JSON-Schema-constrained
+tool call rather than parsed free text (`grounding_response_schema()`,
+`gemini_response_schema()` for Gemini's OpenAPI-subset dialect), with
+confidence nested per-answer so the report can tell "grounding changed the
+answer" apart from "grounding changed how sure the model was."
 
-- **Pseudonymization of the raw sample.** `build_data_context()` rewrites
-  identifier-like columns (`county_fips`) as opaque `region_NN` labels and
-  dates as relative offsets before either condition ever sees them. Without
-  this, the *naive* condition gets a free shortcut that has nothing to do
-  with grounding: every Texas FIPS code starts with `48`, which a
-  knowledgeable model can recognize on sight, and a real calendar range
-  reveals the year restriction directly. This keeps the comparison honest —
-  a difference between conditions is attributable to the datasheet, not to
-  incidental real-world leakage in the raw sample.
-- **Forced structured output, not parsed prose.** Every provider call goes
-  through a JSON-Schema-constrained tool call (`grounding_response_schema()`,
-  translated to each provider's own dialect — see `gemini_response_schema()`
-  for the OpenAPI-subset translation Gemini needs). Each answer carries a
-  self-reported 0–100 confidence, nested as `{answer, confidence}` rather
-  than a bare scalar, specifically so the report can distinguish "grounding
-  changed the answer" from "grounding changed how sure the model was" —
-  these can differ even when the raw answer doesn't move.
-
-`n_repeats > 1` runs independent trials per (provider, condition), and
-`summarize_grounding_trials()` collapses them into a majority-vote answer
-plus an agreement rate — because providers aren't called at temperature 0,
-a single trial's "changed answer" could be sampling noise rather than a
-real grounding effect; the agreement rate is what lets a reader tell those
-apart. `call_anthropic()`, `call_openai()`, `call_gemini()`, and
+`n_repeats > 1` runs independent trials per (provider, condition); see
+`summarize_grounding_trials()` for why that matters (providers aren't
+called at temperature 0, so a single trial's "changed answer" could be
+sampling noise). `call_anthropic()`, `call_openai()`, `call_gemini()`, and
 `call_grok()` are the four provider clients — `call_openai()` and
 `call_grok()` share one implementation (`call_openai_compatible()`) since
-xAI's API is explicitly OpenAI-compatible, and Gemini gets its own path
-since it returns schema-conformant JSON directly rather than going through
-a tool-call.
+xAI's API is explicitly OpenAI-compatible.
 
 This is opt-in (`make grounding`, not part of `make all`/`make results`) —
 it makes real, billed API calls — but it's the piece of this package that
@@ -721,7 +646,7 @@ answer" the wrong thing to expect from any one of them.
 
 ## 10. Testing
 
-`duboisR/tests/testthat/` — 88 `test_that()` blocks across every exported
+`duboisR/tests/testthat/` — 100 `test_that()` blocks across every exported
 function, run against `simulate_stops()`-derived fixtures
 (`helper-fixtures.R`), independent of the real multi-GB dataset ever being
 present on disk. Two tests are worth calling out specifically because they
