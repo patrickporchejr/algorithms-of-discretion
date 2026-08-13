@@ -1,7 +1,5 @@
 # Algorithms of Discretion
 
-**Live dashboard:** https://algorithms-of-discretion.shinyapps.io/algorithms-of-discretion/
-
 An interactive data audit platform examining how socioeconomic and spatial/environmental covariates modify (or fail to modify) apparent racial disparities in U.S. traffic stops.
 
 This repository serves as the applied computational data engine for the white paper:
