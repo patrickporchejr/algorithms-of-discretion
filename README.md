@@ -7,7 +7,8 @@ An interactive data audit platform examining how socioeconomic and spatial/envir
 This repository serves as the applied computational data engine for the white paper:
 
 > **The Algorithmic Color Line: Auditing "Algorithms of Discretion" via QuantCrit and Du Boisian Sociology**  
-> _By: Patrick Eugene Porché Jr._
+> _By: Patrick Eugene Porché Jr._  
+> [SocArXiv preprint](https://osf.io/preprints/socarxiv) (placeholder link until this paper's own preprint is posted)
 
 By examining data science in tandem with W.E.B. Du Bois's _double consciousness_ and Ruha Benjamin's _Race After Technology_, this project demonstrates how administrative police data (and the machine learning models trained on it) encode historical enforcement discretion rather than underlying driver behavior.
 
