@@ -1,16 +1,8 @@
 # Design Doc: Algorithms of Discretion / `duboisR`
 
-This document is the technical companion to the [README](README.md). The
-README tells you how to get the pipeline running and the dashboard open —
-exact commands, exact file paths, exact environment variables. This
-document assumes that worked and answers a different question: *how is
-this actually built, and why does each piece exist in the shape it does.*
-
-The center of gravity here is `duboisR`, an installable R package
-(`duboisR/`) that is the actual diagnostic engine of the project. The
-Python pipeline and the Shiny dashboard both exist to feed it data and
-display its output — neither does statistics on its own. If you only read
-one section, read §5.
+`duboisR` is an installable R package (`duboisR/`) that is the
+diagnostic engine of this project. The Python pipeline and the Shiny dashboard
+both exist to feed it data and display its output.
 
 ---
 
@@ -153,17 +145,17 @@ there's no schema-validation layer; `abort_if_missing_cols()` (in
 closest thing to one, and it only catches a missing column, not a wrong
 type.
 
-| Column | Type | Origin | Notes |
-|---|---|---|---|
-| `subject_race` | string, releveled to `white` before modeling | Stanford | restricted to white/black/hispanic |
-| `subject_sex` | string | Stanford | the entire "demographics" control layer |
-| `search_conducted` | 0/1, `NA` for ~38% of real rows | Stanford | Stanford doesn't report this for every stop — see `subpop_disparities.R`'s NA handling below |
-| `contraband_found` | 0/1, structurally `NA` off-search | Stanford | stand-in for arrest — no arrest field exists |
-| `hour` | int 0–23, no minutes | derived from `date`+`time` | resolution ceiling for Veil of Darkness — see §5.5 |
-| `date` | date | Stanford | consumed by Veil of Darkness |
-| `violation`, `search_basis` | string | Stanford | carried through, not yet consumed by any model — forward-provisioned for a pretextual-stop or consent-search analysis that isn't scoped |
-| `poverty_rate`, `median_income` | float | Census | socioeconomic controls |
-| `county_fips` | string | Census | join target for Veil of Darkness centroids; reference-only elsewhere |
+| Column                          | Type                                         | Origin                     | Notes                                                                                                                                   |
+| ------------------------------- | -------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `subject_race`                  | string, releveled to `white` before modeling | Stanford                   | restricted to white/black/hispanic                                                                                                      |
+| `subject_sex`                   | string                                       | Stanford                   | the entire "demographics" control layer                                                                                                 |
+| `search_conducted`              | 0/1, `NA` for ~38% of real rows              | Stanford                   | Stanford doesn't report this for every stop — see `subpop_disparities.R`'s NA handling below                                            |
+| `contraband_found`              | 0/1, structurally `NA` off-search            | Stanford                   | stand-in for arrest — no arrest field exists                                                                                            |
+| `hour`                          | int 0–23, no minutes                         | derived from `date`+`time` | resolution ceiling for Veil of Darkness — see §5.5                                                                                      |
+| `date`                          | date                                         | Stanford                   | consumed by Veil of Darkness                                                                                                            |
+| `violation`, `search_basis`     | string                                       | Stanford                   | carried through, not yet consumed by any model — forward-provisioned for a pretextual-stop or consent-search analysis that isn't scoped |
+| `poverty_rate`, `median_income` | float                                        | Census                     | socioeconomic controls                                                                                                                  |
+| `county_fips`                   | string                                       | Census                     | join target for Veil of Darkness centroids; reference-only elsewhere                                                                    |
 
 `county_join_key` deliberately does not survive into this file — it's an
 internal pipeline join mechanism, not something any statistical function
@@ -214,7 +206,7 @@ value. It scores via `predict(newdata = ...)` against freshly constructed
 rows rather than reusing `model.frame(fit$model)`, specifically so formula
 terms computed from a raw column (`factor(hour)` on an integer `hour`) get
 re-derived correctly. One subtlety worth knowing if you extend this: a
-predictor referenced through `factor(...)` always uses its *mode*, not its
+predictor referenced through `factor(...)` always uses its _mode_, not its
 mean, even though the underlying column is numeric — `mean(hour) == 11.7`
 isn't a level `factor(hour)` was ever fit on, and `predict()` errors ("has
 new levels") if asked to score one.
@@ -234,7 +226,7 @@ the identical question structure that writes to a resumable, incremental
 template and the wizard cannot drift apart. Neither automates the
 qualitative reflection — this is a design decision inherited directly from
 the source paper, which explicitly warns that automating the reflection
-defeats its purpose. What `duboisR` *does* automate is producing the
+defeats its purpose. What `duboisR` _does_ automate is producing the
 precise statistics some of the questions require (§5.2–5.4), so the
 researcher is filling in judgment, not arithmetic.
 
@@ -265,13 +257,13 @@ researcher's judgment call, the same division of labor as §5.1.
 
 ### 5.3 Identity Proxy diagnostic (`proxy_diagnostics.R`)
 
-The core insight this function operationalizes: *excluding a protected
+The core insight this function operationalizes: _excluding a protected
 attribute from a model does not remove the information it carries if that
-information is encoded in other columns.* Zip code, county, even vehicle
+information is encoded in other columns._ Zip code, county, even vehicle
 age can proxy for race well enough that a "race-blind" model reproduces
 race-correlated outcomes anyway. `check_proxies()` tests this directly by
 temporarily inverting the modeling problem — predicting the protected
-attribute *from* the "neutral" covariates:
+attribute _from_ the "neutral" covariates:
 
 ```r
 check_proxies(
@@ -289,14 +281,15 @@ individual covariates drove that (variable importance for the random
 forest path; the largest `|z|` coefficient per covariate across the
 one-vs-rest logistic fits for the `glm` fallback). Run against the real
 dataset (`precompute_audit.R`), `county_fips + poverty_rate + median_income
-+ hour` alone predicts `subject_race` at ~68% accuracy against a ~47%
+
+- hour`alone predicts`subject*race`at ~68% accuracy against a ~47%
 baseline — geography and time of day are meaningfully proxying for race in
 this data, which is exactly the finding a naive "we didn't include race in
-the model" argument would miss. Worth noting: the `glm` fallback routinely
-produces a (quasi-)separated fit warning — that's the diagnostic *working*
-(a covariate perfectly predicting a race level is the strongest possible
-proxy signal), so the warning is suppressed rather than left to alarm the
-caller.
+the model" argument would miss. Worth noting: the`glm` fallback routinely
+  produces a (quasi-)separated fit warning — that's the diagnostic \_working*
+  (a covariate perfectly predicting a race level is the strongest possible
+  proxy signal), so the warning is suppressed rather than left to alarm the
+  caller.
 
 ### 5.4 Tendentious-outcome diagnostic (`tendentious.R`)
 
@@ -324,9 +317,9 @@ ability to act on race at all.
 
 The design's key control is the **intertwilight restriction**: rather than
 comparing all daylight stops to all dark stops (confounded by the fact
-that *who's on the road* varies by clock time regardless of race), the
-comparison is restricted to clock hours that are *sometimes* daylight and
-*sometimes* dark across the data's date/county range.
+that _who's on the road_ varies by clock time regardless of race), the
+comparison is restricted to clock hours that are _sometimes_ daylight and
+_sometimes_ dark across the data's date/county range.
 `prepare_veil_of_darkness_data()` computes this via
 `compute_daylight_status()` — see that function's own docstring for the
 `match()`-vs-`merge()` and `ISOdatetime()`-vs-string-parsing performance
@@ -354,8 +347,7 @@ will show different hit rates across races if the underlying distribution
 of risk within each race differs — a higher search rate for one group
 doesn't by itself prove a lower bar was applied to that group, if that
 group's marginal searched driver was still, on average, more likely to be
-carrying contraband. The Threshold Test (Simoiu, Corbett-Davies & Goel
-2017) exists to distinguish "different threshold" from "different risk
+carrying contraband. The Threshold Test (Simoiu, Corbett-Davies & Goel 2017) exists to distinguish "different threshold" from "different risk
 distribution" as explanations for an observed search/hit-rate pattern.
 
 The full published method is a hierarchical Bayesian model fit via MCMC.
@@ -403,7 +395,7 @@ synthetic fixtures, are worth knowing about because they're the kind of
 thing that silently corrupts results without erroring:
 
 - `search_conducted` is `NA` (not `FALSE`) for ~38% of real rows. `glm()`
-  drops `NA` rows automatically when *fitting* (`na.action = na.omit`),
+  drops `NA` rows automatically when _fitting_ (`na.action = na.omit`),
   but this function scores against caller-supplied `data` independently of
   the model's training frame — an unfiltered `NA` there poisons every
   group's confusion-matrix `sum()` (default `na.rm = FALSE`). Fixed by
@@ -418,7 +410,7 @@ thing that silently corrupts results without erroring:
 
 ### 5.8 LLM datasheet-grounding experiment (`grounding_experiment.R`, `llm_clients.R`)
 
-The newest and most unusual piece of the package: rather than *asserting*
+The newest and most unusual piece of the package: rather than _asserting_
 that a datasheet makes a dataset's provenance legible, this measures it —
 against an LLM as a concrete downstream consumer. `run_grounding_experiment()`
 asks the same flagship model the same fixed battery of boolean/enum/numeric
@@ -441,7 +433,7 @@ run_grounding_experiment(
 Two design choices keep this from being a one-off demo, each documented in
 full at its own function rather than repeated here: the raw sample is
 pseudonymized before either condition ever sees it (`build_data_context()`)
-specifically so the *naive* condition can't take a shortcut that has
+specifically so the _naive_ condition can't take a shortcut that has
 nothing to do with grounding (e.g. recognizing a real Texas FIPS prefix on
 sight); and every provider call is forced through a JSON-Schema-constrained
 tool call rather than parsed free text (`grounding_response_schema()`,
@@ -621,7 +613,7 @@ to arbitrary tabular data:
   the dark) as an identification strategy.
 - **The Threshold Test** targets infra-marginality specifically, a failure
   mode invisible to outcome-rate comparisons alone — two groups can have
-  identical search *thresholds* and still show different hit rates purely
+  identical search _thresholds_ and still show different hit rates purely
   because their risk distributions differ, and a plain disparity number
   can't tell those apart.
 - **The Identity Proxy check** and **Tendentious-outcome diagnostic** are
@@ -652,7 +644,7 @@ function, run against `simulate_stops()`-derived fixtures
 present on disk. Two tests are worth calling out specifically because they
 validate something a plain "does it run without erroring" test wouldn't:
 the Threshold Test's parameter-recovery test (fits against data simulated
-from a *known* `Beta(a, b)` and asserts the recovered parameters are close
+from a _known_ `Beta(a, b)` and asserts the recovered parameters are close
 to the truth — testing the method, not just the code path), and the Veil
 of Darkness suite's hand-verified daylight/dark/twilight classifications
 against known sunset times. `devtools::check()` passes clean.
