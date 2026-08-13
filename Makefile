@@ -8,7 +8,7 @@ AUDIT_READY := data/processed/audit_ready_stops.csv
 PRECOMPUTE_SCRIPT := duboisR/inst/scripts/precompute_audit.R
 RESULTS_STAMP := results/.stamp
 
-GROUNDING_SCRIPT := duboisR/inst/scripts/run_grounding_experiment.R
+CLI_SCRIPT := duboisR/inst/scripts/cli.R
 
 APP_NAME := algorithms-of-discretion
 
@@ -47,7 +47,7 @@ $(RESULTS_STAMP): $(PRECOMPUTE_SCRIPT) $(AUDIT_READY) $(wildcard duboisR/R/*.R)
 # billed calls in half while iterating on something, instead of the default
 # 2 trials per condition.
 grounding: $(AUDIT_READY)
-	Rscript $(GROUNDING_SCRIPT) $(if $(RESTART),--restart) $(if $(REPEATS),--repeats=$(REPEATS))
+	Rscript $(CLI_SCRIPT) grounding $(if $(RESTART),--restart) $(if $(REPEATS),--repeats=$(REPEATS))
 
 # Opt-in, not part of `all`: pushes a live version to shinyapps.io, unlike
 # every other target here. Needs a one-time `rsconnect::setAccountInfo()`

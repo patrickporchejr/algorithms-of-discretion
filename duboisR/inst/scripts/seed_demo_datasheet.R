@@ -11,11 +11,28 @@
 # Run from the repo root: Rscript duboisR/inst/scripts/seed_demo_datasheet.R
 # Pass --overwrite to force these answers over existing ones instead.
 
+CLI_ARGS <- commandArgs(trailingOnly = TRUE)
+if ("--help" %in% CLI_ARGS || "-h" %in% CLI_ARGS) {
+  cat("
+Usage: Rscript duboisR/inst/scripts/seed_demo_datasheet.R [options]
+   or: Rscript duboisR/inst/scripts/cli.R datasheet [options]
+
+Seeds a first-pass, realistic datasheet.json (data/processed/datasheet.json)
+grounded in this project's actual pipeline/data. Merges into any existing
+file rather than replacing it -- an existing non-empty answer is left
+untouched unless --overwrite is passed.
+
+Options:
+  --overwrite   Replace existing answers instead of only filling blanks.
+")
+  quit(save = "no", status = 0)
+}
+
 source("duboisR/inst/scripts/_load_duboisR.R")
 load_duboisR_or_die("duboisR")
 
 OUTPUT_PATH <- "data/processed/datasheet.json"
-OVERWRITE_EXISTING <- "--overwrite" %in% commandArgs(trailingOnly = TRUE)
+OVERWRITE_EXISTING <- "--overwrite" %in% CLI_ARGS
 
 answers <- list(
   motivation = list(

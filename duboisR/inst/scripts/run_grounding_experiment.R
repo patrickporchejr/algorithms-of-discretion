@@ -11,6 +11,27 @@
 #
 # Run from the repo root: Rscript duboisR/inst/scripts/run_grounding_experiment.R
 
+CLI_ARGS_HELP_CHECK <- commandArgs(trailingOnly = TRUE)
+if ("--help" %in% CLI_ARGS_HELP_CHECK || "-h" %in% CLI_ARGS_HELP_CHECK) {
+  cat("
+Usage: Rscript duboisR/inst/scripts/run_grounding_experiment.R [options]
+   or: Rscript duboisR/inst/scripts/cli.R grounding [options]
+
+Runs the naive-vs-grounded LLM datasheet-grounding experiment against this
+project's real dataset and datasheet, caching the result as
+results/grounding_experiment.rds. Needs a datasheet.json to already exist
+(see the 'datasheet' command) and at least one of ANTHROPIC_API_KEY /
+OPENAI_API_KEY / GEMINI_API_KEY / XAI_API_KEY set in a repo-root .env --
+makes real, billed API calls.
+
+Options:
+  --restart        Ignore/overwrite an existing checkpoint and start over,
+                    instead of resuming an interrupted run.
+  --repeats=<int>   Independent trials per (provider, condition). Default 2.
+")
+  quit(save = "no", status = 0)
+}
+
 source("duboisR/inst/scripts/_load_duboisR.R")
 load_duboisR_or_die("duboisR")
 
