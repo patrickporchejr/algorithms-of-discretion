@@ -28,7 +28,7 @@
   "distribution": {
     "third_parties": "This project's derived dataset (data/processed/audit_ready_stops.csv) is not distributed; it's regenerated locally from the two public sources via `make all`. The underlying Stanford Open Policing data and Census ACS estimates are both already public.",
     "distribution_mechanism": "Not distributed as a standalone dataset. The dashboard (r_dashboard/) is intended to be hosted for read-only demo access rather than distributed as a downloadable app -- see README.",
-    "licensing": "Stanford Open Policing Project data: released for research use (see openpolicing.stanford.edu for current terms). U.S. Census Bureau ACS estimates: U.S. government public-domain data. This project's own code does not yet carry an explicit license file -- add one before any public redistribution beyond the demo."
+    "licensing": "Stanford Open Policing Project data: released for research use (see openpolicing.stanford.edu for current terms). U.S. Census Bureau ACS estimates: U.S. government public-domain data. This project's own code is MIT-licensed (root LICENSE; duboisR/ also carries its own copy via DESCRIPTION's License field)."
   },
   "maintenance": {
     "maintainer": "Patrick Eugene Porche Jr., as part of the \"Algorithms of Discretion\" white paper project.",
