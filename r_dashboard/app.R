@@ -14,11 +14,26 @@
 # forest plot area just stays blank forever. Cairo works headless.
 if (capabilities("cairo")) options(bitmapType = "cairo")
 
-# duboisR: the Wells-Du Bois Protocol diagnostic engine. Dev-mode loads the
-# sibling package source directly (no install step required); falls back to
-# an installed copy if present (e.g. after `devtools::install("duboisR")`).
-source("../duboisR/inst/scripts/_load_duboisR.R")
-load_duboisR_or_die("../duboisR")
+# duboisR: the Wells-Du Bois Protocol diagnostic engine. Not on CRAN, and
+# shinyapps.io's build backend doesn't support either renv's local-sources
+# ("Cellar") mechanism or GitHub-sourced package installs (hit hard build
+# failures with both -- see the README's Deployment section) -- so rather
+# than have renv "install" duboisR at all, deploy bundles just carry a
+# plain source copy (deploy/prepare.sh stages it at duboisR/, same as
+# local dev's sibling ../duboisR checkout) and pkgload::load_all() it at
+# startup, identically to how the shared loader below already works.
+# renv is told to ignore duboisR entirely (see renv/settings.json) so it
+# never tries to resolve/install it as a managed dependency.
+duboisR_loader <- Find(file.exists, c(
+  "duboisR/inst/scripts/_load_duboisR.R",   # deploy bundle (staged copy)
+  "../duboisR/inst/scripts/_load_duboisR.R" # local dev (sibling checkout)
+))
+if (!is.null(duboisR_loader)) {
+  source(duboisR_loader)
+  load_duboisR_or_die(dirname(dirname(dirname(duboisR_loader))))
+} else {
+  library(duboisR)
+}
 
 library(shiny)
 library(bslib)
@@ -31,8 +46,15 @@ source("R/mod_subpop_disparities.R")
 source("R/mod_datasheet.R")
 source("R/mod_grounding_experiment.R")
 
-DATA_PATH <- "../data/processed/audit_ready_stops.csv"
-RESULTS_DIR <- "../results"
+# Deploy bundles carry their own data/ and results/ (staged by
+# deploy/prepare.sh, since shinyapps.io only uploads this directory); local
+# dev falls back to the sibling repo layout instead.
+DATA_PATH <- if (file.exists("data/audit_ready_stops.csv")) {
+  "data/audit_ready_stops.csv"
+} else {
+  "../data/processed/audit_ready_stops.csv"
+}
+RESULTS_DIR <- if (dir.exists("results")) "results" else "../results"
 
 AUDIT_CONTROL_MAP <- list(
   demographics = "subject_sex",

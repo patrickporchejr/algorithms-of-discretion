@@ -1,5 +1,7 @@
 # Algorithms of Discretion
 
+**Live dashboard:** https://algorithms-of-discretion.shinyapps.io/algorithms-of-discretion/
+
 An interactive data audit platform examining how socioeconomic and spatial/environmental covariates modify (or fail to modify) apparent racial disparities in U.S. traffic stops.
 
 This repository serves as the applied computational data engine for the white paper:
@@ -270,3 +272,101 @@ build_datasheet_wizard(output = "data/processed/datasheet.json")
 or scaffold the plain-Markdown version (no automation of the reflection
 itself, by design — see the package's Datasheets-for-Datasets docs) with
 `use_datasheet()`.
+
+---
+
+## Deployment (shinyapps.io)
+
+`r_dashboard/` is set up to deploy as a self-contained bundle via
+[`rsconnect`](https://rstudio.github.io/rsconnect/). Two things make that
+non-obvious, so they're worth calling out before you run anything:
+
+- **`app.R`'s paths are dual-mode.** In dev, it reaches out to the sibling
+  `../duboisR`, `../data/processed`, and `../results` directories. shinyapps.io
+  only uploads the directory you deploy, so `app.R` checks for a bundled
+  `data/`/`results/`/`duboisR/` inside `r_dashboard/` first and only falls
+  back to the sibling paths when those aren't present.
+  `r_dashboard/deploy/prepare.sh` is what populates that bundled copy —
+  see below.
+- **`duboisR` isn't on CRAN, and isn't renv-installed at all for deploy.**
+  Two more-obvious approaches were tried first and both failed on
+  shinyapps.io's build backend specifically (not a local/client-side
+  problem): renv's local-sources ("Cellar") mechanism uploads a built
+  tarball, but shinyapps.io's manifest parser doesn't recognize that
+  package source (`Error parsing manifest: Unknown repository for package
+  source: cellar`); a GitHub-sourced renv dependency (pinned to this
+  repo's `duboisR/` subdirectory) got further — shinyapps.io fetched it —
+  but failed extracting GitHub's tarball server-side (`ERROR: cannot
+  extract package from ...tar.gz`, after a "skipping pax global extended
+  headers" warning). Since both failures were in shinyapps.io's own
+  package-source resolution step, not in anything under this repo's
+  control, the fix sidesteps that step entirely: `duboisR` is listed in
+  `renv/settings.json`'s `ignored.packages` so renv never tries to
+  install/resolve it as a managed dependency, and `deploy/prepare.sh`
+  instead stages a plain source copy at `r_dashboard/duboisR/` (just
+  `DESCRIPTION`, `NAMESPACE`, `R/`, `inst/` — no `tests/`/`vignettes/`
+  /`man/`/`data-raw/`, which are dev-only and would otherwise drag
+  `testthat`/`knitr`/`rmarkdown` into the deploy for nothing). `app.R`
+  loads it with `pkgload::load_all()` at startup — the same shared loader
+  (`duboisR/inst/scripts/_load_duboisR.R`) local dev already used for its
+  sibling `../duboisR` checkout, just pointed at the bundled copy instead.
+  `duboisR`'s own dependencies (`rlang`, `ggplot2`, `suncalc`, `httr2`,
+  `ranger`, etc.) are still ordinary CRAN packages that renv resolves
+  normally — only `duboisR` itself is special-cased.
+
+**One-time setup:**
+
+```bash
+# 1. Create a free account at https://www.shinyapps.io, then from its
+#    dashboard: Account > Tokens > Show, to get a token + secret.
+
+# 2. From inside r_dashboard/ (so .Rprofile activates its renv project and
+#    rsconnect/duboisR are both visible to the session):
+cd r_dashboard
+Rscript -e 'renv::install("rsconnect")'   # dev tooling only, not an app dependency -- deliberately not in renv.lock
+Rscript -e 'rsconnect::setAccountInfo(name="<account>", token="<token>", secret="<secret>")'
+```
+
+`setAccountInfo()` writes straight to `rsconnect`'s local config — never
+commit a token/secret to the repo or paste them anywhere shared.
+
+**Every deploy:**
+
+```bash
+make deploy   # results (if stale) -> stage data/results -> rsconnect::deployApp(".")
+```
+
+`make deploy` chains `results` (so it never ships a stale model fit),
+runs `r_dashboard/deploy/prepare.sh` to stage `audit_ready_stops.csv`,
+`results/*.rds`, and a plain source copy of `duboisR/` into `r_dashboard/`,
+then calls `rsconnect::deployApp(".")` from inside `r_dashboard/` — the
+`APP_NAME` variable at the top of the `Makefile` controls the app name it
+deploys under. Re-running it after future changes (including edits to
+`duboisR/`) picks up the latest source automatically via `prepare.sh` and
+pushes a new version to the same URL — no separate resnapshot step needed
+for `duboisR` changes specifically, since it isn't renv-managed. If you add
+a *new* dependency to `duboisR`'s `Imports:`, install it into
+`r_dashboard`'s renv project and re-snapshot so it ends up in
+`renv.lock`:
+
+```bash
+cd r_dashboard && Rscript -e 'renv::install("<new-package>"); renv::snapshot()'
+```
+
+**Memory.** Toggling any control layer in the dashboard triggers a live
+`read_csv()` of the ~650MB `audit_ready_stops.csv` plus a `glm()` fit over
+its ~5.6M rows — comfortably more than shinyapps.io's free-tier ~1GB
+instances can hold. This needs a paid plan with a larger instance size
+(set under the app's **Settings > General > Instance Size** in the
+shinyapps.io dashboard) — the no-controls view alone (served from the
+cached `results/*.rds`) is cheap, but don't expect the free tier to survive
+someone checking a box.
+
+**Fresh clone / new machine.** `r_dashboard/renv/library` is gitignored
+(platform-specific binaries, not source), so after cloning, run
+`renv::restore()` from inside `r_dashboard/` to rebuild it — this covers
+every CRAN dependency, but not `duboisR` itself, which renv is told to
+ignore (see above). For local dev that's already fine: `app.R` finds it
+via the sibling `../duboisR` checkout that comes with the clone. For
+deploying, `deploy/prepare.sh` stages a copy automatically — nothing
+extra to do.

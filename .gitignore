@@ -30,6 +30,14 @@ venv/
 renv/library/
 renv/staging/
 
+# deploy staging: r_dashboard/deploy/prepare.sh copies data/processed and
+# results into the app bundle (shinyapps.io only uploads r_dashboard/
+# itself, so these live-here copies are what actually gets deployed) --
+# regenerable from the real data/ and results/ above, not source of truth.
+r_dashboard/data/
+r_dashboard/results/
+r_dashboard/duboisR/
+
 # env / secrets
 .env
 *.env.local

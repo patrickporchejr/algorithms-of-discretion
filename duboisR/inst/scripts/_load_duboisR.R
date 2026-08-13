@@ -8,12 +8,16 @@
 load_duboisR_or_die <- function(pkg_path = "duboisR") {
   if (requireNamespace("duboisR", quietly = TRUE)) {
     library(duboisR)
-  } else if (requireNamespace("devtools", quietly = TRUE)) {
-    devtools::load_all(pkg_path, quiet = TRUE)
+  } else if (requireNamespace("pkgload", quietly = TRUE)) {
+    # pkgload is what devtools::load_all() itself delegates to -- calling it
+    # directly avoids pulling in devtools' much heavier dev-only dependency
+    # tree (roxygen2, testthat, pkgbuild, gert/libgit2, ...) just to load an
+    # already-written package's R/ source.
+    pkgload::load_all(pkg_path, quiet = TRUE)
   } else {
     stop(
-      "duboisR is not installed and devtools is unavailable to load it from ",
-      "source. Run: Rscript -e 'install.packages(\"devtools\"); devtools::install(\"duboisR\")'"
+      "duboisR is not installed and pkgload is unavailable to load it from ",
+      "source. Run: Rscript -e 'install.packages(\"pkgload\"); devtools::install(\"duboisR\")'"
     )
   }
 }

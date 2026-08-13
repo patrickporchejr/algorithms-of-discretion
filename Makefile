@@ -10,7 +10,9 @@ RESULTS_STAMP := results/.stamp
 
 GROUNDING_SCRIPT := duboisR/inst/scripts/run_grounding_experiment.R
 
-.PHONY: all data results grounding clean
+APP_NAME := algorithms-of-discretion
+
+.PHONY: all data results grounding deploy clean
 
 all: results
 
@@ -46,6 +48,16 @@ $(RESULTS_STAMP): $(PRECOMPUTE_SCRIPT) $(AUDIT_READY) $(wildcard duboisR/R/*.R)
 # 2 trials per condition.
 grounding: $(AUDIT_READY)
 	Rscript $(GROUNDING_SCRIPT) $(if $(RESTART),--restart) $(if $(REPEATS),--repeats=$(REPEATS))
+
+# Opt-in, not part of `all`: pushes a live version to shinyapps.io, unlike
+# every other target here. Needs a one-time `rsconnect::setAccountInfo()`
+# first (see README's Deployment section) -- this doesn't set up
+# credentials, just stages results and calls deployApp() with them already
+# configured. Depends on `results` so it never ships stale model fits, but
+# that's a no-op if `results` is already up to date.
+deploy: results
+	./r_dashboard/deploy/prepare.sh
+	cd r_dashboard && Rscript -e 'rsconnect::deployApp(".", appName = "$(APP_NAME)")'
 
 clean:
 	rm -f $(CENSUS_RAW) $(STOPS_CLEAN) $(AUDIT_READY)
