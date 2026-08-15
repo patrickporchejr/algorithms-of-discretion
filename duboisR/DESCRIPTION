@@ -1,7 +1,7 @@
 Package: duboisR
 Title: Diagnostic Tools for Algorithmic Fairness Auditing (the Wells-Du Bois Protocol)
 Version: 0.0.0.9000
-Authors@R: person("Patrick Eugene", "Porché", , "porchewellness@gmail.com",
+Authors@R: person("Patrick Eugene", "Porché", , "patrickporchejr@gmail.com",
                    role = c("aut", "cre"))
 Description: Diagnostic engine implementing the Wells-Du Bois Protocol for
     auditing administrative traffic-stop data for encoded enforcement
@@ -27,14 +27,17 @@ Imports:
     httr2,
     patchwork,
     stats,
-    utils
+    utils,
+    grid,
+    grDevices
 Suggests:
     testthat (>= 3.0.0),
     ranger,
     withr,
     devtools,
     knitr,
-    rmarkdown
+    rmarkdown,
+    gridExtra
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.1.0

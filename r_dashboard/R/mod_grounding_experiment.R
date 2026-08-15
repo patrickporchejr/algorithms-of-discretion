@@ -23,7 +23,15 @@ grounding_module_ui <- function(id) {
   ns <- NS(id)
   tagList(
     uiOutput(ns("summary")),
+    plotOutput(ns("accuracy_plot"), height = "380px"),
+    uiOutput(ns("accuracy_note")),
     h5("Per-question comparison"),
+    p(
+      class = "text-muted",
+      "One row per question. Each provider's cell reads naive ", HTML("&rarr;"), " grounded: ",
+      HTML("&#10003;"), " correct, ", HTML("&#10007;"), " incorrect, ", HTML("&mdash;"),
+      " no valid answer in any trial."
+    ),
     tableOutput(ns("comparison_table"))
   )
 }
@@ -36,26 +44,51 @@ grounding_module_server <- function(id, results_dir) {
       readRDS(path)
     })
 
-    comparison <- reactive({
+    summarized <- reactive({
       res <- result()
       req(res)
-      summarized <- duboisR::summarize_grounding_trials(res$results)
+      duboisR::summarize_grounding_trials(res$results)
+    })
 
-      cols <- c("provider", "question_id", "modal_answer", "accuracy", "agreement", "mean_confidence")
-      naive <- summarized[summarized$condition == "naive", cols]
-      grounded <- summarized[summarized$condition == "grounded", cols]
+    # One row per question (not per question/provider pair): each provider
+    # gets its own column, so a question's text is read once instead of
+    # once per provider. Cell = naive accuracy -> grounded accuracy, each
+    # side a checkmark/cross/percentage rather than a full sentence.
+    question_table <- reactive({
+      cols <- c("provider", "question_id", "accuracy")
+      naive <- summarized()[summarized()$condition == "naive", cols]
+      grounded <- summarized()[summarized()$condition == "grounded", cols]
       merged <- merge(naive, grounded, by = c("provider", "question_id"), suffixes = c("_naive", "_grounded"))
 
-      meta <- unique(summarized[c("question_id", "type", "prompt", "expected_answer", "rationale")])
-      out <- merge(meta, merged, by = "question_id")
-      # modal_answer is NA when a question was never validly answered in any
-      # trial -- "changed" is undefined there, not FALSE, so call it out by
-      # name instead of letting `==` against NA surface as a bare "NA" cell.
-      out$changed <- ifelse(
-        is.na(out$modal_answer_naive) | is.na(out$modal_answer_grounded), "unanswered",
-        ifelse(out$modal_answer_naive == out$modal_answer_grounded, "", "changed")
+      symbol <- function(accuracy) {
+        # accuracy is NA when no trial produced a valid answer; otherwise a
+        # fraction correct across trials (usually 0 or 1 at n_repeats = 1).
+        ifelse(
+          is.na(accuracy), "—",
+          ifelse(
+            accuracy >= 0.999, "✓",
+            ifelse(accuracy <= 0.001, "✗", sprintf("%.0f%%", 100 * accuracy))
+          )
+        )
+      }
+      # Non-breaking spaces around the arrow -- otherwise a narrow provider
+      # column wraps "X" onto its own line, splitting "✓ → ✓" mid-cell.
+      merged$cell <- paste0(symbol(merged$accuracy_naive), " → ", symbol(merged$accuracy_grounded))
+
+      wide <- stats::reshape(
+        merged[c("question_id", "provider", "cell")],
+        idvar = "question_id", timevar = "provider", direction = "wide"
       )
-      out[order(out$provider, out$question_id), ]
+      names(wide) <- sub("^cell\\.", "", names(wide))
+      provider_cols <- setdiff(names(wide), "question_id")
+      # A provider that never returned a row at all for this question (not
+      # even an invalid one) reshapes to a genuine NA, not "no valid answer"
+      # -- reads the same either way, as an em dash rather than "NA" text.
+      for (col in provider_cols) wide[[col]][is.na(wide[[col]])] <- "—"
+
+      meta <- unique(summarized()[c("question_id", "prompt", "expected_answer", "rationale")])
+      out <- merge(meta, wide, by = "question_id")
+      out[order(out$question_id), ]
     })
 
     output$summary <- renderUI({
@@ -88,26 +121,27 @@ grounding_module_server <- function(id, results_dir) {
       )
     })
 
+    output$accuracy_plot <- renderPlot({
+      duboisR::plot_grounding_accuracy(summarized())
+    })
+
+    output$accuracy_note <- renderUI({
+      p(strong("What this data shows: "), duboisR::interpret_grounding_accuracy(summarized()))
+    })
+
     output$comparison_table <- renderTable({
-      cmp <- comparison()
-      fmt_cell <- function(answer, accuracy, agreement, confidence) {
-        # answer/agreement are NA when no trial produced a valid answer --
-        # say so plainly instead of rendering a bare "NA (0% correct, NA%
-        # stable, conf NaN)" cell.
-        ifelse(
-          is.na(answer), "(no valid answer in any trial)",
-          sprintf("%s (%.0f%% correct, %.0f%% stable, conf %.0f)", answer, 100 * accuracy, 100 * agreement, confidence)
-        )
-      }
-      data.frame(
-        Provider = cmp$provider,
-        Question = cmp$prompt,
-        Naive = fmt_cell(cmp$modal_answer_naive, cmp$accuracy_naive, cmp$agreement_naive, cmp$mean_confidence_naive),
-        Grounded = fmt_cell(cmp$modal_answer_grounded, cmp$accuracy_grounded, cmp$agreement_grounded, cmp$mean_confidence_grounded),
-        Changed = cmp$changed,
-        Rationale = cmp$rationale,
-        check.names = FALSE
-      )
+      qt <- question_table()
+      providers <- setdiff(names(qt), c("question_id", "prompt", "expected_answer", "rationale"))
+      out <- qt[c("prompt", "expected_answer", providers, "rationale")]
+      names(out) <- c("Question", "Expected", .dubois_display_cap(providers), "Rationale")
+      out
     })
   })
+}
+
+# tools::toTitleCase-lite -- provider names ("anthropic") as column headers
+# read better capitalized ("Anthropic"), and this module has no dependency
+# on duboisR's internal (non-exported) .dubois_cap().
+.dubois_display_cap <- function(x) {
+  paste0(toupper(substr(x, 1, 1)), substr(x, 2, nchar(x)))
 }

@@ -14,11 +14,11 @@ infra-marginality, and intersectional subpopulation disparity
 disaggregation. See \code{vignette("wells-du-bois-protocol", package = "duboisR")} for the theoretical grounding.
 }
 \author{
-\strong{Maintainer}: Patrick Eugene Porché \email{porchewellness@gmail.com}
+\strong{Maintainer}: Patrick Eugene Porché \email{patrickporchejr@gmail.com}
 
 Authors:
 \itemize{
-  \item Patrick Eugene Porché \email{porchewellness@gmail.com}
+  \item Patrick Eugene Porché \email{patrickporchejr@gmail.com}
 }
 
 }

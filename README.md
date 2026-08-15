@@ -12,9 +12,9 @@ This repository is the applied computational engine for the white paper:
 Three pieces, one file-based pipeline:
 
 - **Data Pipeline (Python, `python/`):** ingests Texas traffic-stop records from the Stanford Open Policing Project and performs spatial joins on County FIPS.
-- **`duboisR` (R package, `duboisR/`):** the Veil of Darkness natural-experiment test (Grogger & Ridgeway 2006) — sunset/dusk classification via `suncalc`, the intertwilight-hour design that makes the comparison valid, and the descriptive charts built on top of it. Also implements the Datasheets-for-Datasets provenance scaffolding and the LLM datasheet-grounding experiment that two of the CLI's three programs (below) drive.
-- **Shiny Dashboard (`r_dashboard/`):** a browser front end onto the precomputed Veil of Darkness and Threshold Test charts (see [The Veil of Darkness dashboard](#the-veil-of-darkness-dashboard) / [The Threshold Test dashboard](#the-threshold-test-dashboard)).
-- **CLI (`duboisR/inst/scripts/`):** four Rscript entry points — Veil of Darkness charts, the Threshold Test (+ naive outcome-test comparison), the datasheet generator, and the LLM grounding test (see [Command-line interface](#command-line-interface)).
+- **`duboisR` (R package, `duboisR/`):** the Veil of Darkness natural-experiment test (Grogger & Ridgeway 2006) — sunset/dusk classification via `suncalc`, the intertwilight-hour design that makes the comparison valid, and the descriptive charts built on top of it. Also implements the Datasheets-for-Datasets provenance scaffolding (extended with a Du Boisian Positionality & Counter-Narrative section and an Audit Results Appendix, per Monroe-White & Lecy 2023) and the LLM datasheet-grounding experiment that several of the CLI's programs (below) drive.
+- **Shiny Dashboard (`r_dashboard/`):** a browser front end onto the precomputed Veil of Darkness, Threshold Test, and Data Transparency & Provenance tabs (see [The Veil of Darkness dashboard](#the-veil-of-darkness-dashboard) / [The Threshold Test dashboard](#the-threshold-test-dashboard)).
+- **CLI (`duboisR/inst/scripts/`):** five Rscript entry points — Veil of Darkness charts, the Threshold Test (+ naive outcome-test comparison), the datasheet generator, an audit-results autofill step, and the LLM grounding test (see [Command-line interface](#command-line-interface)).
 
 `duboisR` also implements several other diagnostics from its broader Wells-Du Bois Protocol design (identity-proxy/tendentious-outcome checks, subpopulation disparity disaggregation) — exported and tested, but not part of the currently shipped dashboard/CLI surface this README documents. `?function_name` after `devtools::load_all("duboisR")` covers all of it if you go looking.
 
@@ -138,9 +138,11 @@ Rscript duboisR/inst/scripts/cli.R <command> [options]
 | `veil`      | Print/save the two stop-decision Veil of Darkness charts (see below) |
 | `threshold` | Search-rate disparity, the Threshold Test, and its naive-outcome-test comparison (see below) |
 | `datasheet` | Seed a first-pass `datasheet.json` for the processed dataset       |
-| `grounding` | Run the naive-vs-grounded LLM datasheet-grounding experiment       |
+| `autofill`  | Fill `datasheet.json`'s Audit Results Appendix from the latest `results/*.rds` (run after `make results`) |
+| `grounding` | Run the naive-vs-grounded LLM datasheet-grounding experiment (also writes its PDFs) |
+| `grounding-report` | Re-render the grounding experiment's PDFs from an existing `results/*.rds` (no API calls) |
 
-`Rscript duboisR/inst/scripts/cli.R --help` lists all four; `Rscript duboisR/inst/scripts/cli.R <command> --help` prints that command's own options — every command supports `--help`. Each command is also its own independently runnable script (`Rscript duboisR/inst/scripts/veil_of_darkness_cli.R ...`, etc., named in each subsection below) — `cli.R <command> [options]` is a thin dispatcher onto the exact same script with the exact same options, not a separate implementation, so either form does the same thing.
+`Rscript duboisR/inst/scripts/cli.R --help` lists all commands; `Rscript duboisR/inst/scripts/cli.R <command> --help` prints that command's own options — every command supports `--help`. Each command is also its own independently runnable script (`Rscript duboisR/inst/scripts/veil_of_darkness_cli.R ...`, etc., named in each subsection below) — `cli.R <command> [options]` is a thin dispatcher onto the exact same script with the exact same options, not a separate implementation, so either form does the same thing.
 
 ### Veil of Darkness charts
 
@@ -304,6 +306,17 @@ build_datasheet_wizard(output = "data/processed/datasheet.json")   # interactive
 # or: use_datasheet("datasheet.md")                                # static template only
 ```
 
+To edit a section's free text directly (no wizard, no re-running any script), `data/processed/datasheet.json` is plain JSON — hand-edit it, or call `duboisR::seed_datasheet_answers(list(section = list(question = "text")), path = "data/processed/datasheet.json")` from an R console for a scripted one-field update. Either path is a normal way to fill in the qualitative sections (Motivation, Positionality & Counter-Narrative, Uses, ...) that `autofill` (below) deliberately never touches.
+
+### Autofill (Audit Results Appendix)
+
+`autofill` (`duboisR/inst/scripts/autofill_datasheet.R`) writes the datasheet's **Audit Results Appendix** section straight from whatever is currently in `results/vod_charts.rds` and `results/threshold_test.rds` — every sentence comes from `duboisR`'s own `interpret_*()` functions run against the live cached results, not hand-transcribed prose. Run it after regenerating charts (`make results`, or `Rscript duboisR/inst/scripts/precompute_audit.R` directly) so the appendix never drifts from what the Veil of Darkness / Threshold Test tabs are actually showing:
+
+```bash
+Rscript duboisR/inst/scripts/cli.R autofill                # fills only if audit_appendix is currently blank
+Rscript duboisR/inst/scripts/cli.R autofill --overwrite     # refresh with the latest numbers (usual choice after `make results`)
+```
+
 ### LLM Grounding Test
 
 `grounding` (`duboisR/inst/scripts/run_grounding_experiment.R`) asks a flagship LLM the same fixed battery of boolean/multiple-choice/numeric questions about the dataset twice — once given only a compact, pseudonymized description ("naive"), once given the same description plus an explicit instruction to read `datasheet.json` first ("grounded") — and scores both against hand-authored expected answers, so the value of the datasheet is measured rather than asserted (see `duboisR::run_grounding_experiment()`).
@@ -311,7 +324,7 @@ build_datasheet_wizard(output = "data/processed/datasheet.json")   # interactive
 ```bash
 # Set at least one of these in your .env (see .env.example):
 #   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / XAI_API_KEY
-Rscript duboisR/inst/scripts/cli.R grounding                          # -> results/grounding_experiment.rds
+Rscript duboisR/inst/scripts/cli.R grounding                          # -> results/grounding_experiment.rds + 3 PDFs
 Rscript duboisR/inst/scripts/cli.R grounding --repeats=1              # halve the billed calls while iterating
 Rscript duboisR/inst/scripts/cli.R grounding --restart                # ignore an existing checkpoint, start over
 
@@ -320,6 +333,13 @@ make grounding
 ```
 
 Real, billed API calls — not part of `make all`/`make results`, and needs a datasheet to already exist (run the Datasheet step above first). See a dated cost snapshot in a comment near the top of `duboisR/inst/scripts/run_grounding_experiment.R`.
+
+Every `grounding` run also writes three report-ready PDFs to `results/` (see `duboisR::write_grounding_report()`): `grounding_accuracy_table.pdf` (accuracy by provider/condition), `grounding_accuracy_chart.pdf` (naive-vs-grounded accuracy, `duboisR::plot_grounding_accuracy()`), and `grounding_per_question.pdf` (one row per question, naive → grounded per provider, paginated). To re-render just the PDFs from an existing `results/grounding_experiment.rds` — no API calls, safe to iterate on formatting — use `grounding-report`:
+
+```bash
+Rscript duboisR/inst/scripts/cli.R grounding-report                   # re-reads results/grounding_experiment.rds
+Rscript duboisR/inst/scripts/cli.R grounding-report --rds=<path> --out=<dir>
+```
 
 `make clean` removes every generated file (`data/processed/*.csv`, `results/`) so you can rebuild from scratch; it does *not* touch the raw Stanford download.
 

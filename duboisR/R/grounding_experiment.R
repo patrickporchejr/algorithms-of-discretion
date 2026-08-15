@@ -411,16 +411,36 @@ summarize_grounding_trials <- function(results) {
   )
 }
 
+#' Mean accuracy/confidence per (provider, model, condition)
+#'
+#' The aggregate [format.duboisR_grounding_result()] renders as its
+#' "Accuracy by provider/condition" table -- pulled out as its own function
+#' so [write_grounding_report()]'s PDF export renders the identical table
+#' instead of re-deriving it from scratch.
+#'
+#' @param summarized Output of [summarize_grounding_trials()].
+#' @return A tibble: `provider`, `model`, `condition`, `mean_confidence`,
+#'   `accuracy_pct`.
+#' @export
+summarize_grounding_accuracy_table <- function(summarized) {
+  abort_if_missing_cols(summarized, c("provider", "model", "condition", "accuracy", "mean_confidence"))
+  by_condition <- stats::aggregate(
+    cbind(accuracy, mean_confidence) ~ provider + model + condition,
+    data = summarized, FUN = mean
+  )
+  by_condition$accuracy_pct <- round(100 * by_condition$accuracy, 1)
+  by_condition$mean_confidence <- round(by_condition$mean_confidence, 1)
+  by_condition$accuracy <- NULL
+  tibble::as_tibble(by_condition)
+}
+
 #' @export
 format.duboisR_grounding_result <- function(x, ...) {
   results <- x$results
   summarized <- summarize_grounding_trials(results)
   n_trials <- if (nrow(results) > 0) max(results$trial) else 0
 
-  by_condition <- stats::aggregate(cbind(accuracy, mean_confidence) ~ provider + model + condition, data = summarized, FUN = mean)
-  by_condition$accuracy_pct <- round(100 * by_condition$accuracy, 1)
-  by_condition$mean_confidence <- round(by_condition$mean_confidence, 1)
-  by_condition$accuracy <- NULL
+  by_condition <- summarize_grounding_accuracy_table(summarized)
 
   # agreement is NA for a question no trial ever produced a valid answer
   # for -- na.rm = TRUE so that one unanswered question excludes itself from
@@ -467,4 +487,202 @@ format.duboisR_grounding_result <- function(x, ...) {
 print.duboisR_grounding_result <- function(x, ...) {
   cat(paste(format(x), collapse = "\n"), "\n")
   invisible(x)
+}
+
+#' Plot naive-vs-grounded accuracy by provider
+#'
+#' Collapses [summarize_grounding_trials()]'s per-question rows to one
+#' majority-vote accuracy percentage per (provider, condition) -- the same
+#' aggregate [format.duboisR_grounding_result()] tables as text -- and draws
+#' it as a dodged bar chart, so whether grounding in the datasheet helps
+#' reads at a glance instead of only from the table's raw numbers.
+#'
+#' @param summarized Output of [summarize_grounding_trials()].
+#' @return A `ggplot`.
+#' @export
+plot_grounding_accuracy <- function(summarized) {
+  abort_if_missing_cols(summarized, c("provider", "condition", "accuracy"))
+  by_condition <- stats::aggregate(accuracy ~ provider + condition, data = summarized, FUN = mean)
+  by_condition$accuracy_pct <- 100 * by_condition$accuracy
+  # Explicit level order so "naive" always dodges to the left of "grounded"
+  # -- matches the subtitle's "naive vs. grounded" reading order, rather than
+  # alphabetical ("grounded" before "naive").
+  by_condition$condition <- factor(by_condition$condition, levels = c("naive", "grounded"))
+
+  ggplot2::ggplot(by_condition, ggplot2::aes(x = .data$provider, y = .data$accuracy_pct, fill = .data$condition)) +
+    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.7), width = 0.6) +
+    ggplot2::geom_text(
+      ggplot2::aes(label = sprintf("%.0f%%", .data$accuracy_pct)),
+      position = ggplot2::position_dodge(width = 0.7), vjust = -0.4, size = 3.2
+    ) +
+    ggplot2::scale_y_continuous(limits = c(0, 100), expand = ggplot2::expansion(mult = c(0, 0.12))) +
+    ggplot2::labs(
+      title = "Does grounding in the datasheet change accuracy?",
+      subtitle = "Majority-vote accuracy per provider, naive vs. grounded",
+      x = NULL, y = "Accuracy", fill = "Condition"
+    )
+}
+
+#' Plain-language interpretation of naive-vs-grounded accuracy by provider
+#'
+#' Reads the same per-provider accuracy [plot_grounding_accuracy()] draws
+#' and narrates which providers got more (or less) accurate once grounded
+#' in the datasheet.
+#'
+#' @param summarized Output of [summarize_grounding_trials()].
+#' @return A character scalar (one sentence).
+#' @export
+interpret_grounding_accuracy <- function(summarized) {
+  abort_if_missing_cols(summarized, c("provider", "condition", "accuracy"))
+  by_condition <- stats::aggregate(accuracy ~ provider + condition, data = summarized, FUN = mean)
+
+  naive <- by_condition[by_condition$condition == "naive", c("provider", "accuracy")]
+  grounded <- by_condition[by_condition$condition == "grounded", c("provider", "accuracy")]
+  names(naive)[2] <- "naive_accuracy"
+  names(grounded)[2] <- "grounded_accuracy"
+  wide <- merge(naive, grounded, by = "provider")
+  wide$diff_pct <- round(100 * (wide$grounded_accuracy - wide$naive_accuracy), 1)
+
+  # "X" / "X and Y" / "X, Y, and Z" -- an Oxford-comma list, capitalized.
+  list_and <- function(x) {
+    x <- .dubois_cap(x)
+    if (length(x) == 0) {
+      return(NULL)
+    } else if (length(x) == 1) {
+      x
+    } else if (length(x) == 2) {
+      paste(x, collapse = " and ")
+    } else {
+      paste0(paste(x[-length(x)], collapse = ", "), ", and ", x[length(x)])
+    }
+  }
+
+  improved <- list_and(wide$provider[wide$diff_pct > 0])
+  worsened <- list_and(wide$provider[wide$diff_pct < 0])
+  unchanged <- list_and(wide$provider[wide$diff_pct == 0])
+
+  parts <- c(
+    if (!is.null(improved)) sprintf("%s got more accurate once grounded in the datasheet", improved),
+    if (!is.null(worsened)) sprintf("%s got less accurate", worsened),
+    if (!is.null(unchanged)) sprintf("%s was unchanged", unchanged)
+  )
+  paste0(paste(parts, collapse = "; "), ".")
+}
+
+#' One row per question, one column per provider (naive -> grounded)
+#'
+#' Collapses [summarize_grounding_trials()]'s one-row-per-(provider,
+#' question) rows into one row per question, with a compact per-provider
+#' cell instead of a provider column and the question text repeated once
+#' per provider. Each cell is `"<symbol> -> <symbol>"` (naive, then
+#' grounded), where a symbol is a checkmark (correct), cross (incorrect),
+#' rounded percentage (partial credit across repeated trials), or an em
+#' dash (no trial in that condition produced a valid answer at all).
+#' Shared by the Shiny "LLM Grounding Test" tab's per-question table and
+#' [write_grounding_report()]'s PDF export of the same table, so both read
+#' one row per question the same way instead of two independently
+#' hand-rolled pivots that could drift apart.
+#'
+#' @param summarized Output of [summarize_grounding_trials()].
+#' @return A tibble: `question_id`, `prompt`, `expected_answer`,
+#'   `rationale`, and one character column per provider (named after that
+#'   provider).
+#' @export
+build_grounding_question_table <- function(summarized) {
+  abort_if_missing_cols(
+    summarized, c("provider", "question_id", "condition", "accuracy", "prompt", "expected_answer", "rationale")
+  )
+
+  cols <- c("provider", "question_id", "accuracy")
+  naive <- summarized[summarized$condition == "naive", cols]
+  grounded <- summarized[summarized$condition == "grounded", cols]
+  merged <- merge(naive, grounded, by = c("provider", "question_id"), suffixes = c("_naive", "_grounded"))
+
+  symbol <- function(accuracy) {
+    ifelse(
+      is.na(accuracy), "—",
+      ifelse(accuracy >= 0.999, "✓", ifelse(accuracy <= 0.001, "✗", sprintf("%.0f%%", 100 * accuracy)))
+    )
+  }
+  # Non-breaking spaces around the arrow -- a narrow provider column would
+  # otherwise wrap the second symbol onto its own line, splitting the cell.
+  merged$cell <- paste0(symbol(merged$accuracy_naive), " → ", symbol(merged$accuracy_grounded))
+
+  wide <- stats::reshape(
+    merged[c("question_id", "provider", "cell")],
+    idvar = "question_id", timevar = "provider", direction = "wide"
+  )
+  names(wide) <- sub("^cell\\.", "", names(wide))
+  provider_cols <- setdiff(names(wide), "question_id")
+  # A provider that never returned a row at all for this question (not even
+  # an invalid one) reshapes to a genuine NA -- reads the same as "no valid
+  # answer", an em dash rather than literal "NA" text.
+  for (col in provider_cols) wide[[col]][is.na(wide[[col]])] <- "—"
+
+  meta <- unique(summarized[c("question_id", "prompt", "expected_answer", "rationale")])
+  out <- merge(meta, wide, by = "question_id")
+  tibble::as_tibble(out[order(out$question_id), c("question_id", "prompt", "expected_answer", provider_cols, "rationale")])
+}
+
+#' Write the naive-vs-grounded PDF report (table, chart, per-question table)
+#'
+#' Three standalone PDFs for pulling straight into a paper/report -- the
+#' same "Accuracy by provider/condition" table [format.duboisR_grounding_result()]
+#' prints, [plot_grounding_accuracy()]'s chart, and
+#' [build_grounding_question_table()]'s condensed per-question table
+#' (paginated, since it typically runs 50+ rows) -- all built from one
+#' [summarize_grounding_trials()] pass so the PDFs can't drift from what
+#' the console/Shiny views show. Makes no API calls itself; call it on an
+#' already-run `duboisR_grounding_result` (e.g. one just returned by
+#' [run_grounding_experiment()], or `readRDS()`ed back from a previous run)
+#' to regenerate the PDFs for free.
+#'
+#' @param result A `duboisR_grounding_result`.
+#' @param out_dir Directory to write the three PDFs into. Created if it
+#'   doesn't exist. Default `"results"`.
+#' @param prefix Filename prefix. Default `"grounding"`.
+#' @return Character vector of the three paths written, invisibly.
+#' @export
+write_grounding_report <- function(result, out_dir = "results", prefix = "grounding") {
+  summarized <- summarize_grounding_trials(result$results)
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+  accuracy_table_path <- file.path(out_dir, paste0(prefix, "_accuracy_table.pdf"))
+  render_table_pdf(
+    summarize_grounding_accuracy_table(summarized), accuracy_table_path,
+    title = "Accuracy by provider/condition"
+  )
+
+  accuracy_chart_path <- file.path(out_dir, paste0(prefix, "_accuracy_chart.pdf"))
+  ggplot2::ggsave(accuracy_chart_path, plot_grounding_accuracy(summarized), width = 8, height = 5)
+
+  question_table <- build_grounding_question_table(summarized)
+  provider_cols <- setdiff(names(question_table), c("question_id", "prompt", "expected_answer", "rationale"))
+  display <- question_table[c("prompt", "expected_answer", provider_cols, "rationale")]
+  names(display) <- c("Question", "Expected", .dubois_cap(provider_cols), "Rationale")
+
+  # PDF-only, ASCII-safe stand-ins for the checkmark/cross/arrow/em-dash
+  # glyphs build_grounding_question_table() uses -- those render fine in a
+  # browser (the Shiny tab uses them as-is), but a PDF's embedded font may
+  # not carry those specific glyphs (seen on this project's own CI: cairo's
+  # default font silently drops them rather than erroring), so this
+  # rendering path can't assume glyph coverage the way HTML can.
+  ascii_safe <- function(x) {
+    x <- gsub("✓", "Y", x, fixed = TRUE)
+    x <- gsub("✗", "N", x, fixed = TRUE)
+    x <- gsub("→", "->", x, fixed = TRUE)
+    gsub("—", "-", x, fixed = TRUE)
+  }
+  for (col in .dubois_cap(provider_cols)) display[[col]] <- ascii_safe(display[[col]])
+
+  per_question_path <- file.path(out_dir, paste0(prefix, "_per_question.pdf"))
+  render_table_pdf(
+    display, per_question_path,
+    title = "Per-question comparison (naive -> grounded)",
+    wrap_cols = c("Question", "Rationale"), wrap_width = 45, rows_per_page = 6
+  )
+
+  paths <- c(accuracy_table_path, accuracy_chart_path, per_question_path)
+  for (p in paths) cli::cli_inform("Wrote {.path {p}}")
+  invisible(paths)
 }

@@ -23,19 +23,17 @@ cat("Loading", DATA_PATH, "...\n")
 stops_data <- readr::read_csv(DATA_PATH, show_col_types = FALSE)
 stops_data <- dubois_relevel(stops_data, "subject_race", ref = "white")
 
-# --- Everything below except the Veil of Darkness prepare step and the
-# Threshold Test fit is commented out while the dashboard is stripped down
-# to the Veil of Darkness tab's two charts and the Threshold Test tab (see
-# r_dashboard/app.R, r_dashboard/R/mod_veil_of_darkness.R,
-# r_dashboard/R/mod_threshold_test.R). Nothing else currently reads these
-# artifacts. Uncomment any block to bring the corresponding tab back.
+# --- The search-decision race:is_dark interaction GLM block below is
+# commented out while the Veil of Darkness tab shows only its two
+# descriptive charts (see r_dashboard/R/mod_veil_of_darkness.R's header
+# comment) -- on the frozen dataset that regression didn't meaningfully
+# change the picture, so it's no longer precomputed. fit_veil_of_darkness()
+# itself is still exported and tested; call it directly for console/
+# white-paper use. Uncomment the block below to bring it back.
 #
-# The search-decision race:is_dark interaction GLM (previously cached here
-# as veil_search_conducted.rds) was removed from the tab -- on the frozen
-# dataset it didn't meaningfully change the picture (see
-# r_dashboard/R/mod_veil_of_darkness.R's header comment) -- so that fit is
-# no longer precomputed either. fit_veil_of_darkness() itself is still
-# exported and tested; call it directly for console/white-paper use.
+# composition.rds / identity_proxies.rds / tendentious_checks.rds ARE
+# computed below -- they back the "Data Transparency & Provenance" tab
+# (r_dashboard/R/mod_datasheet.R), which reads all three.
 
 # glm() fit objects embed a full copy of the training data (model frame,
 # fitted values, residuals, weights -- several length-nrow(data) vectors),
@@ -94,52 +92,52 @@ saveRDS(
   file.path(RESULTS_DIR, "threshold_test.rds")
 )
 
-# cat("Computing dataset composition...\n")
-# # Same shape as Threshold Test: fixed, not parameterized by any sidebar
-# # input, so one cached artifact.
-# composition <- audit_composition(stops_data, group_col = "subject_race", missing_col = "contraband_found")
-# saveRDS(composition, file.path(RESULTS_DIR, "composition.rds"))
-#
-# cat("Running identity-proxy check (subject_race ~ county_fips + poverty_rate + median_income + hour)...\n")
-# # check_proxies(method = "rf") on the FULL 5.6M-row dataset takes ~18min
-# # (verified) for a result within 0.1 accuracy points of a 300k-row sample
-# # (67.9% vs. 68.0%, 20.8 vs. 20.9-point lift) -- not worth 18min of `make
-# # results` for that difference, so this uses a fixed-seed sample instead.
-# set.seed(20240101)
-# proxy_sample <- stops_data[sample(nrow(stops_data), 300000), ]
-# proxy_sample$county_fips <- as.character(proxy_sample$county_fips)
-# identity_proxies <- check_proxies(
-#   proxy_sample, protected_attr = "subject_race",
-#   predictors = c("county_fips", "poverty_rate", "median_income", "hour"),
-#   method = "rf", test_prop = 0.2, seed = 1
-# )
-# saveRDS(identity_proxies, file.path(RESULTS_DIR, "identity_proxies.rds"))
-#
-# cat("Classifying outcome variables as tendentious...\n")
-# # check_tendentious() doesn't touch the data -- it's a researcher
-# # classification, not a statistic -- so this is instant. Both outcomes are
-# # classified as administrative (officer discretion), not objective ground
-# # truth: see the rationale strings below, which are what
-# # duboisR::format.duboisR_tendentious_check() renders on the dashboard.
-# tendentious_checks <- list(
-#   search_conducted = check_tendentious(
-#     "search_conducted", classification = "administrative", interactive = FALSE,
-#     rationale = paste(
-#       "An officer's discretionary decision to search, not an objective",
-#       "measurement of what a driver was carrying."
-#     )
-#   ),
-#   contraband_found = check_tendentious(
-#     "contraband_found", classification = "administrative", interactive = FALSE,
-#     rationale = paste(
-#       "Structurally NA unless a search happened, and the decision to search",
-#       "is itself administrative discretion -- so this outcome inherits the",
-#       "same selection bias as search_conducted, on top of whatever the",
-#       "search itself finds."
-#     )
-#   )
-# )
-# saveRDS(tendentious_checks, file.path(RESULTS_DIR, "tendentious_checks.rds"))
+cat("Computing dataset composition...\n")
+# Same shape as Threshold Test: fixed, not parameterized by any sidebar
+# input, so one cached artifact.
+composition <- audit_composition(stops_data, group_col = "subject_race", missing_col = "contraband_found")
+saveRDS(composition, file.path(RESULTS_DIR, "composition.rds"))
+
+cat("Running identity-proxy check (subject_race ~ county_fips + poverty_rate + median_income + hour)...\n")
+# check_proxies(method = "rf") on the FULL 5.6M-row dataset takes ~18min
+# (verified) for a result within 0.1 accuracy points of a 300k-row sample
+# (67.9% vs. 68.0%, 20.8 vs. 20.9-point lift) -- not worth 18min of `make
+# results` for that difference, so this uses a fixed-seed sample instead.
+set.seed(20240101)
+proxy_sample <- stops_data[sample(nrow(stops_data), 300000), ]
+proxy_sample$county_fips <- as.character(proxy_sample$county_fips)
+identity_proxies <- check_proxies(
+  proxy_sample, protected_attr = "subject_race",
+  predictors = c("county_fips", "poverty_rate", "median_income", "hour"),
+  method = "rf", test_prop = 0.2, seed = 1
+)
+saveRDS(identity_proxies, file.path(RESULTS_DIR, "identity_proxies.rds"))
+
+cat("Classifying outcome variables as tendentious...\n")
+# check_tendentious() doesn't touch the data -- it's a researcher
+# classification, not a statistic -- so this is instant. Both outcomes are
+# classified as administrative (officer discretion), not objective ground
+# truth: see the rationale strings below, which are what
+# duboisR::format.duboisR_tendentious_check() renders on the dashboard.
+tendentious_checks <- list(
+  search_conducted = check_tendentious(
+    "search_conducted", classification = "administrative", interactive = FALSE,
+    rationale = paste(
+      "An officer's discretionary decision to search, not an objective",
+      "measurement of what a driver was carrying."
+    )
+  ),
+  contraband_found = check_tendentious(
+    "contraband_found", classification = "administrative", interactive = FALSE,
+    rationale = paste(
+      "Structurally NA unless a search happened, and the decision to search",
+      "is itself administrative discretion -- so this outcome inherits the",
+      "same selection bias as search_conducted, on top of whatever the",
+      "search itself finds."
+    )
+  )
+)
+saveRDS(tendentious_checks, file.path(RESULTS_DIR, "tendentious_checks.rds"))
 
 cat("Computing Veil of Darkness descriptive charts...\n")
 # Two small aggregate tables backing the dashboard's descriptive charts

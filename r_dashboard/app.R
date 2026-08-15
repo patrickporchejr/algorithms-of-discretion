@@ -39,17 +39,16 @@ library(shiny)
 library(bslib)
 library(tidyverse)
 
-# Veil of Darkness and Threshold Test are active right now (see nav_panel
-# section below) -- Datasheet/Grounding are commented out, not deleted, so
-# uncommenting either source() line plus its nav_panel/module_server call
-# brings that tab back. (The Regression Model / Subpopulation Disparities
-# tabs that used to sit here were removed entirely, not just commented --
-# see the git history for r_dashboard/R/mod_regression.R and
-# mod_subpop_disparities.R if you want them back.)
+# Veil of Darkness, Threshold Test, Data Transparency & Provenance, and LLM
+# Grounding Test are all active right now (see nav_panel section below).
+# (The Regression Model / Subpopulation Disparities tabs that used to sit
+# here were removed entirely, not just commented -- see the git history
+# for r_dashboard/R/mod_regression.R and mod_subpop_disparities.R if you
+# want them back.)
 source("R/mod_veil_of_darkness.R")
 source("R/mod_threshold_test.R")
-# source("R/mod_datasheet.R")
-# source("R/mod_grounding_experiment.R")
+source("R/mod_datasheet.R")
+source("R/mod_grounding_experiment.R")
 
 # Deploy bundles carry their own data/ and results/ (staged by
 # deploy/prepare.sh, since shinyapps.io only uploads this directory); local
@@ -68,9 +67,9 @@ ui <- page_fluid(
   layout_columns(
     navset_card_tab(
       nav_panel("Veil of Darkness (VOD)", veil_module_ui("veil")),
-      nav_panel("Threshold Test", threshold_module_ui("threshold"))
-      # nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance")),
-      # nav_panel("LLM Grounding Test", grounding_module_ui("grounding"))
+      nav_panel("Threshold Test", threshold_module_ui("threshold")),
+      nav_panel("Data Transparency & Provenance", datasheet_module_ui("provenance")),
+      nav_panel("LLM Grounding Test", grounding_module_ui("grounding"))
     )
   )
 )
@@ -78,12 +77,14 @@ ui <- page_fluid(
 server <- function(input, output, session) {
   veil_module_server("veil", results_dir = RESULTS_DIR)
   threshold_module_server("threshold", results_dir = RESULTS_DIR)
+  datasheet_module_server("provenance", results_dir = RESULTS_DIR, data_path = DATA_PATH)
 
-  # Datasheet/Grounding are commented out, not deleted -- uncomment
-  # alongside the matching nav_panel/source() lines above to bring a tab
-  # back.
-  # datasheet_module_server("provenance", results_dir = RESULTS_DIR, data_path = DATA_PATH)
-  # grounding_module_server("grounding", results_dir = RESULTS_DIR)
+  # Renders the precomputed results/grounding_experiment.rds only -- loading
+  # this tab does NOT trigger any live LLM API calls (those only happen via
+  # `make grounding` / duboisR::run_grounding_experiment(), a separate,
+  # explicitly billed step). Degrades gracefully with a setup message if
+  # the .rds doesn't exist yet.
+  grounding_module_server("grounding", results_dir = RESULTS_DIR)
 }
 
 shinyApp(ui = ui, server = server)

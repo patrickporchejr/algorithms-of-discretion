@@ -50,6 +50,25 @@ _Your answer here._
 _Your answer here._
 
 
+## Positionality & Counter-Narrative
+
+**What is the analyst/research team's relationship to the communities and institutions this data represents, and how might that shape interpretation?**
+
+_Your answer here._
+
+**Whose categories does this dataset use to describe people and stops (e.g. who defines 'search', 'contraband', race labels), and what alternative framings does that choice foreclose?**
+
+_Your answer here._
+
+**What does this dataset structurally prevent an analyst from seeing (e.g. stops never initiated, an officer's discretion not to record an encounter, outcomes beyond citation/arrest/search)?**
+
+_Your answer here._
+
+**What counter-narrative or alternative causal story should a reader hold alongside any single disparity number this dataset produces?**
+
+_Your answer here._
+
+
 ## Preprocessing/cleaning/labeling
 
 **Was any preprocessing/cleaning/labeling of the data done?**
@@ -80,6 +99,25 @@ _Your answer here._
 _Your answer here._
 
 **Are there tasks for which the dataset should not be used (see duboisR::check_tendentious())?**
+
+_Your answer here._
+
+
+## Audit Results Appendix
+
+**Summarize the Veil of Darkness (stop-decision) audit results across counties: is there a systematic ratio shift after dark, and which counties are reliable enough to interpret individually (see duboisR::summarize_county_vod_disparity())?**
+
+_Your answer here._
+
+**Summarize the county-level search-rate (frequency) disparity by race: how large is the typical gap, and how consistent is it across counties (see duboisR::summarize_county_search_disparity())?**
+
+_Your answer here._
+
+**Summarize the Threshold Test (infra-marginality-corrected) results: where does the naive outcome-test gap agree or disagree with the corrected inferred-threshold gap, and how reliable is the corrected fit (see duboisR::fit_threshold_test(), duboisR::compare_outcome_threshold_test())?**
+
+_Your answer here._
+
+**Given the Veil of Darkness and Threshold Test results together, where in the stop-to-search pipeline does racial disparity concentrate in this data, and what caveats limit how far that conclusion can be pushed?**
 
 _Your answer here._
 

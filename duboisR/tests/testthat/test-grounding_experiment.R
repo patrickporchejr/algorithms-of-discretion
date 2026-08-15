@@ -424,3 +424,125 @@ test_that("format.duboisR_grounding_result excludes unanswered questions from ag
   expect_true(grepl("excluded from that comparison", out, fixed = TRUE))
   expect_true(grepl("1 question/provider pair\\(s\\) excluded", out))
 })
+
+test_that("plot_grounding_accuracy returns a ggplot with one bar per provider/condition", {
+  summarized <- tibble::tibble(
+    provider = rep(c("anthropic", "openai"), each = 2),
+    condition = rep(c("naive", "grounded"), 2),
+    accuracy = c(0.5, 1, 0.75, 0.75)
+  )
+  p <- plot_grounding_accuracy(summarized)
+  expect_s3_class(p, "ggplot")
+  expect_equal(nrow(p$data), 4)
+})
+
+test_that("interpret_grounding_accuracy narrates which providers improved, worsened, or stayed the same", {
+  summarized <- tibble::tibble(
+    provider = rep(c("anthropic", "openai", "gemini"), each = 2),
+    condition = rep(c("naive", "grounded"), 3),
+    accuracy = c(0.5, 1, 1, 0.5, 0.5, 0.5)
+  )
+  out <- interpret_grounding_accuracy(summarized)
+  expect_true(grepl("Anthropic got more accurate", out, fixed = TRUE))
+  expect_true(grepl("Openai got less accurate", out, fixed = TRUE))
+  expect_true(grepl("Gemini was unchanged", out, fixed = TRUE))
+})
+
+test_that("summarize_grounding_accuracy_table matches format.duboisR_grounding_result's own table", {
+  results <- tibble::tibble(
+    provider = "anthropic", model = "test-model",
+    condition = rep(c("naive", "grounded"), each = 2), trial = rep(c(1, 2), 2),
+    question_id = "q1", type = "boolean", prompt = "Is X true?",
+    answer = c("TRUE", "TRUE", "TRUE", "TRUE"), confidence = c(60, 80, 90, 90),
+    expected_answer = "TRUE", correct = TRUE, rationale = "because X"
+  )
+  summarized <- summarize_grounding_trials(results)
+  tbl <- summarize_grounding_accuracy_table(summarized)
+
+  expect_setequal(names(tbl), c("provider", "model", "condition", "mean_confidence", "accuracy_pct"))
+  expect_equal(tbl$accuracy_pct, c(100, 100)) # every trial in this fixture is correct
+  naive_row <- tbl[tbl$condition == "naive", ]
+  expect_equal(naive_row$mean_confidence, 70) # mean(60, 80)
+
+  result <- structure(list(results = results), class = "duboisR_grounding_result")
+  out <- paste(format(result), collapse = "\n")
+  expect_true(grepl("70", out, fixed = TRUE))
+})
+
+test_that("build_grounding_question_table collapses to one row per question with naive -> grounded cells", {
+  summarized <- tibble::tibble(
+    provider = rep(c("anthropic", "openai"), each = 2),
+    condition = rep(c("naive", "grounded"), 2),
+    question_id = "q1", type = "boolean", prompt = "Is X true?",
+    accuracy = c(0, 1, 1, 1), # anthropic: wrong -> right; openai: right -> right
+    expected_answer = "TRUE", rationale = "because X"
+  )
+  out <- build_grounding_question_table(summarized)
+
+  expect_equal(nrow(out), 1) # one row for q1, not one per provider
+  expect_setequal(names(out), c("question_id", "prompt", "expected_answer", "rationale", "anthropic", "openai"))
+  # \uXXXX escapes, not literal typed glyphs -- avoids a Unicode
+  # normalization mismatch between this file's bytes and the ones
+  # build_grounding_question_table() actually constructs.
+  expect_equal(out$anthropic, "✗ → ✓")
+  expect_equal(out$openai, "✓ → ✓")
+})
+
+test_that("build_grounding_question_table marks a provider with no row at all for a question as an em dash", {
+  # anthropic answered both questions; openai only ran on q1 -- q2 has no
+  # (openai, q2) row whatsoever, unlike an NA accuracy (ran, but no trial
+  # produced a valid answer). reshape() leaves that cell NA; the em dash
+  # fill-in must catch it the same as the NA-accuracy case does.
+  summarized <- tibble::tibble(
+    provider = c("anthropic", "anthropic", "anthropic", "anthropic", "openai", "openai"),
+    condition = c("naive", "grounded", "naive", "grounded", "naive", "grounded"),
+    question_id = c("q1", "q1", "q2", "q2", "q1", "q1"),
+    type = "boolean", prompt = c("Is X true?", "Is X true?", "Is Y true?", "Is Y true?", "Is X true?", "Is X true?"),
+    accuracy = 1, expected_answer = "TRUE",
+    rationale = c("because X", "because X", "because Y", "because Y", "because X", "because X")
+  )
+  out <- build_grounding_question_table(summarized)
+  out <- out[order(out$question_id), ]
+  expect_equal(out$anthropic, c("✓ → ✓", "✓ → ✓"))
+  expect_equal(out$openai, c("✓ → ✓", "—")) # q1, then q2 (never ran)
+})
+
+test_that("render_table_pdf writes a PDF for a small table and for a wrapped, multi-page one", {
+  tmp <- withr::local_tempdir()
+
+  small_path <- file.path(tmp, "small.pdf")
+  small_df <- data.frame(a = 1:3, b = c("x", "y", "z"))
+  render_table_pdf(small_df, small_path, title = "A small table")
+  expect_true(file.exists(small_path))
+  expect_gt(file.size(small_path), 0)
+
+  wrapped_path <- file.path(tmp, "wrapped.pdf")
+  wrapped_df <- data.frame(
+    text = rep("This is a long sentence that should get word-wrapped across several lines.", 10)
+  )
+  render_table_pdf(wrapped_df, wrapped_path, wrap_cols = "text", wrap_width = 20, rows_per_page = 3)
+  expect_true(file.exists(wrapped_path))
+  # 10 rows at 3/page -> 4 pages; pdf() writes one "endobj"-delimited page
+  # tree per page, and the simplest content-agnostic proxy for "more than
+  # one page got written" is just that the multi-page file is bigger than
+  # the single-page one above.
+  expect_gt(file.size(wrapped_path), file.size(small_path))
+})
+
+test_that("write_grounding_report writes all three PDFs without making any API calls", {
+  tmp <- withr::local_tempdir()
+  results <- tibble::tibble(
+    provider = rep(c("anthropic", "openai"), each = 2),
+    model = rep(c("m1", "m2"), each = 2),
+    condition = rep(c("naive", "grounded"), 2), trial = 1,
+    question_id = "q1", type = "boolean", prompt = "Is X true?",
+    answer = "TRUE", confidence = 80, expected_answer = "TRUE",
+    correct = TRUE, rationale = "because X"
+  )
+  result <- structure(list(results = results), class = "duboisR_grounding_result")
+
+  paths <- write_grounding_report(result, out_dir = tmp)
+  expect_length(paths, 3)
+  expect_true(all(file.exists(paths)))
+  expect_true(all(grepl("\\.pdf$", paths)))
+})

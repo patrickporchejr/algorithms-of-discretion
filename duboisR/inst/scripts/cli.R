@@ -18,14 +18,18 @@ COMMANDS <- list(
   veil = "veil_of_darkness_cli.R",
   threshold = "threshold_test_cli.R",
   datasheet = "seed_demo_datasheet.R",
-  grounding = "run_grounding_experiment.R"
+  autofill = "autofill_datasheet.R",
+  grounding = "run_grounding_experiment.R",
+  "grounding-report" = "grounding_report_cli.R"
 )
 
 COMMAND_DESCRIPTIONS <- c(
   veil = "Veil of Darkness charts (county / statewide / search / combined / all)",
   threshold = "Threshold Test + naive outcome-test comparison charts (fit / compare / all)",
   datasheet = "Seed a first-pass datasheet.json for the processed dataset",
-  grounding = "Run the naive-vs-grounded LLM datasheet-grounding experiment"
+  autofill = "Fill datasheet.json's Audit Results Appendix from the latest results/*.rds (run after `make results`)",
+  grounding = "Run the naive-vs-grounded LLM datasheet-grounding experiment (also writes its PDFs)",
+  "grounding-report" = "Re-render the grounding experiment's PDFs from an existing results/*.rds (no API calls)"
 )
 
 USAGE <- sprintf(

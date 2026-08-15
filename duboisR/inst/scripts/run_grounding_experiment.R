@@ -163,3 +163,10 @@ cat("Wrote", file.path(RESULTS_DIR, "grounding_experiment.rds"), "\n")
 if (file.exists(CHECKPOINT_PATH)) file.remove(CHECKPOINT_PATH)
 
 print(result)
+
+# PDF versions of the same three views, for pulling straight into a paper/
+# report -- see ?write_grounding_report. Runs against the .rds just saved
+# above, not live data, so a formatting bug here can't touch anything
+# already billed; re-running only this step (no new API calls) is
+# `Rscript duboisR/inst/scripts/cli.R grounding-report`.
+write_grounding_report(result, RESULTS_DIR)

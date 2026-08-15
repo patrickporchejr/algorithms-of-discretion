@@ -4,11 +4,21 @@
 # so use_datasheet()'s static template and build_datasheet_wizard()'s
 # interactive prompts never drift out of sync with each other.
 #
-# The seven sections and their sub-questions follow Gebru et al. 2021,
+# The base seven sections and their sub-questions follow Gebru et al. 2021,
 # "Datasheets for Datasets" (Communications of the ACM), with three
 # questions explicitly cross-referencing duboisR's own diagnostic
 # functions (audit_composition(), check_proxies(), check_tendentious())
 # per the source feedback document's integration proposal.
+#
+# Two more sections extend that base per Monroe-White & Lecy 2023's
+# Du Boisian/Wells-Du Bois critique of Gebru et al.: "Positionality &
+# Counter-Narrative" (whose categories does the dataset use, and what does
+# it structurally prevent an analyst from seeing) and "Audit Results
+# Appendix" (the actual computed Veil of Darkness / Threshold Test tables,
+# not just a promise that audits were run). Additive to the original seven
+# -- nothing renamed or removed -- so existing datasheet.json content and
+# the Shiny "Data Transparency & Provenance" tab keep working unchanged for
+# every section besides these two new ones.
 #
 # usethis::use_data(internal = TRUE) overwrites the *entire* sysdata.rda
 # with only the objects named in its call -- it doesn't merge with what's
@@ -42,6 +52,15 @@ datasheet_questions <- list(
       ethical_review = "Were any ethical review processes conducted?"
     )
   ),
+  positionality = list(
+    title = "Positionality & Counter-Narrative",
+    questions = c(
+      researcher_positionality = "What is the analyst/research team's relationship to the communities and institutions this data represents, and how might that shape interpretation?",
+      whose_categories = "Whose categories does this dataset use to describe people and stops (e.g. who defines 'search', 'contraband', race labels), and what alternative framings does that choice foreclose?",
+      structural_silences = "What does this dataset structurally prevent an analyst from seeing (e.g. stops never initiated, an officer's discretion not to record an encounter, outcomes beyond citation/arrest/search)?",
+      counter_narrative = "What counter-narrative or alternative causal story should a reader hold alongside any single disparity number this dataset produces?"
+    )
+  ),
   preprocessing = list(
     title = "Preprocessing/cleaning/labeling",
     questions = c(
@@ -57,6 +76,15 @@ datasheet_questions <- list(
       prior_uses = "Has the dataset been used for any tasks already?",
       composition_impact = "Is there anything about the composition of the dataset, or the way it was collected, that might impact future uses?",
       inappropriate_uses = "Are there tasks for which the dataset should not be used (see duboisR::check_tendentious())?"
+    )
+  ),
+  audit_appendix = list(
+    title = "Audit Results Appendix",
+    questions = c(
+      vod_summary = "Summarize the Veil of Darkness (stop-decision) audit results across counties: is there a systematic ratio shift after dark, and which counties are reliable enough to interpret individually (see duboisR::summarize_county_vod_disparity())?",
+      search_disparity_summary = "Summarize the county-level search-rate (frequency) disparity by race: how large is the typical gap, and how consistent is it across counties (see duboisR::summarize_county_search_disparity())?",
+      threshold_summary = "Summarize the Threshold Test (infra-marginality-corrected) results: where does the naive outcome-test gap agree or disagree with the corrected inferred-threshold gap, and how reliable is the corrected fit (see duboisR::fit_threshold_test(), duboisR::compare_outcome_threshold_test())?",
+      reliability_and_synthesis = "Given the Veil of Darkness and Threshold Test results together, where in the stop-to-search pipeline does racial disparity concentrate in this data, and what caveats limit how far that conclusion can be pushed?"
     )
   ),
   distribution = list(

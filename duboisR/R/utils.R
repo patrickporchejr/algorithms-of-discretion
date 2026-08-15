@@ -129,6 +129,70 @@ add_figure_caption <- function(plot, caption, width = 100) {
   }
 }
 
+#' Render a data frame as a paginated table PDF
+#'
+#' A small `gridExtra`-based table renderer for exporting a data frame as a
+#' standalone PDF -- for a table meant to go straight into a paper/report,
+#' not just a Shiny page. Character columns named in `wrap_cols` are
+#' word-wrapped to `wrap_width` first (a long free-text column -- a
+#' rationale, a question prompt -- would otherwise force one illegibly wide
+#' row); every other column is left as-is. Rows are split across pages,
+#' `rows_per_page` each, so a many-row table doesn't get squeezed onto one
+#' dense page.
+#'
+#' @param df A data frame.
+#' @param path Output PDF path.
+#' @param title Optional title printed above the table on every page.
+#' @param wrap_cols Character vector of column names to word-wrap before
+#'   rendering. Default none.
+#' @param wrap_width Wrap width in characters for `wrap_cols`. Default 40.
+#' @param rows_per_page Maximum rows per page. Default 12.
+#' @param base_size Base font size (points) for table text. Default 8.
+#' @param width,height PDF page size in inches. Default landscape letter
+#'   (11 x 8.5).
+#' @return `path`, invisibly.
+#' @export
+render_table_pdf <- function(df, path, title = NULL, wrap_cols = character(0),
+                              wrap_width = 40, rows_per_page = 12, base_size = 8,
+                              width = 11, height = 8.5) {
+  rlang::check_installed("gridExtra", reason = "to export a table as a PDF.")
+
+  for (col in intersect(wrap_cols, names(df))) {
+    df[[col]] <- vapply(
+      as.character(df[[col]]),
+      function(x) paste(strwrap(x, width = wrap_width), collapse = "\n"),
+      character(1)
+    )
+  }
+
+  # cairo_pdf(), not pdf() -- base pdf()'s Type1/single-byte fonts can't
+  # render the checkmark/cross/arrow/em-dash glyphs these tables use (silent
+  # "conversion failure ... mbcsToSbcs" warnings, glyphs dropped from the
+  # output); Cairo's PDF backend renders full Unicode.
+  grDevices::cairo_pdf(path, width = width, height = height, onefile = TRUE)
+  on.exit(grDevices::dev.off())
+
+  theme <- gridExtra::ttheme_default(
+    core = list(fg_params = list(cex = base_size / 10, hjust = 0, x = 0.02)),
+    colhead = list(fg_params = list(cex = base_size / 10, fontface = "bold", hjust = 0, x = 0.02))
+  )
+
+  n <- nrow(df)
+  if (n == 0) {
+    grid::grid.newpage()
+    grid::grid.text(if (!is.null(title)) paste0(title, "\n\n(no rows)") else "(no rows)")
+    return(invisible(path))
+  }
+
+  starts <- seq(1, n, by = rows_per_page)
+  for (start in starts) {
+    end <- min(start + rows_per_page - 1, n)
+    grob <- gridExtra::tableGrob(df[start:end, , drop = FALSE], rows = NULL, theme = theme)
+    gridExtra::grid.arrange(grob, top = title)
+  }
+  invisible(path)
+}
+
 #' Abort with a clear message if required columns are missing
 #'
 #' @param data A data frame.
