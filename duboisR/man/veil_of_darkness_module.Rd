@@ -16,22 +16,26 @@ stop with lat/lon/sunset/dusk/\code{is_dark} attached -- see
 \code{\link[=compute_daylight_status]{compute_daylight_status()}}), \verb{$sun_times} (the distinct
 date x county sunset/dusk lookup \verb{$stops_geo} was built from),
 \verb{$vod_data} (the intertwilight-restricted subset -- see
-\code{\link[=prepare_veil_of_darkness_data]{prepare_veil_of_darkness_data()}}), and the four chart-data
-tables: \verb{$county_vod_disparity}, \verb{$statewide_vod},
-\verb{$county_search_rates}, \verb{$county_search_disparity}. \code{config} is
-reserved for future options; nothing reads it yet.}
+\code{\link[=prepare_veil_of_darkness_data]{prepare_veil_of_darkness_data()}}), and the two stop-decision
+chart-data tables: \verb{$county_vod_disparity}, \verb{$statewide_vod}.
+\code{config} is reserved for future options; nothing reads it yet.
+This module is scoped to the stop decision only -- the search
+decision's frequency/quality diagnostics
+(\code{\link[=summarize_county_search_disparity]{summarize_county_search_disparity()}}, \code{\link[=fit_threshold_test]{fit_threshold_test()}})
+aren't tied to daylight/dark at all, so they aren't part of this
+stateful wrapper; call them directly.}
 \item{\verb{$plot_county_vod(min_n = 30)}}{Builds, stores as \verb{$vod_plot},
 and returns the county VoD-ratio scatter (chart 1).}
 \item{\verb{$plot_statewide()}}{Builds, stores as \verb{$statewide_plot} and
 \verb{$statewide_table}, and returns the statewide before/after bar
 chart (chart 2).}
-\item{\verb{$plot_search_rate(min_n = 30)}}{Builds, stores as
-\verb{$search_rate_plot}, and returns the county search-rate disparity
-scatter (chart 3).}
-\item{\verb{$plot_combined()}}{Builds (calling the two methods above
-first if their plots aren't built yet), stores as
-\verb{$combined_plot}, and returns the side-by-side stop-vs-search
-figure (chart 4).}
+\item{\verb{$fit_regression(outcome_var = "search_conducted", interaction = TRUE, control_map = list(), controls_selected = character(0))}}{
+The actual Grogger-Ridgeway regression test (see
+\code{\link[=fit_veil_of_darkness]{fit_veil_of_darkness()}}), not just the descriptive charts above --
+stores and returns a \code{duboisR_vod_result}. Defaults \code{interaction}
+to \code{TRUE}, the opposite of \code{\link[=fit_veil_of_darkness]{fit_veil_of_darkness()}}'s own default,
+because a caller reaching for this method already wants the
+\code{race:is_dark} term, not the additive model.}
 }
 }
 \description{
@@ -54,7 +58,7 @@ or reassigning the returned object.
 vod <- veil_of_darkness_module()
 vod$init(data_path = "data/processed/audit_ready_stops.csv")
 print(vod)
-vod$plot_combined()
+vod$plot_county_vod()
 vod$county_vod_disparity  # the underlying table is right there too
 }
 }

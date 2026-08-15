@@ -21,8 +21,6 @@ test_that("$init() populates every documented field and chart methods build the 
   expect_true(all(!is.na(vod$vod_data$is_dark)))
   expect_true(is.data.frame(vod$county_vod_disparity))
   expect_true(is.data.frame(vod$statewide_vod))
-  expect_true(is.data.frame(vod$county_search_rates))
-  expect_true(is.data.frame(vod$county_search_disparity))
 
   expect_null(vod$vod_plot)
   expect_s3_class(vod$plot_county_vod(min_n = 1), "ggplot")
@@ -30,25 +28,25 @@ test_that("$init() populates every documented field and chart methods build the 
 
   expect_s3_class(vod$plot_statewide(), "ggplot")
   expect_true(is.data.frame(vod$statewide_table))
-
-  expect_s3_class(vod$plot_search_rate(min_n = 1), "ggplot")
 })
 
-test_that("$plot_combined() lazily builds the county/search plots it depends on", {
-  skip_if_not_installed("patchwork")
+test_that("$fit_regression() errors before $init() and fits the interaction model by default after", {
+  vod <- veil_of_darkness_module()
+  expect_error(vod$fit_regression(), "Call \\$init\\(\\)")
+
   d <- dubois_test_stops(3000)
   tmp <- withr::local_tempfile(fileext = ".csv")
   readr::write_csv(d, tmp)
-
-  vod <- veil_of_darkness_module()
   vod$init(data_path = tmp)
-  expect_null(vod$vod_plot)
-  expect_null(vod$search_rate_plot)
 
-  combined <- vod$plot_combined()
-  expect_s3_class(combined, "patchwork")
-  expect_false(is.null(vod$vod_plot))
-  expect_false(is.null(vod$search_rate_plot))
+  expect_null(vod$regression_fit)
+  fit <- vod$fit_regression()
+  expect_s3_class(fit, "duboisR_vod_result")
+  expect_identical(vod$regression_fit, fit)
+  expect_true(any(grepl(":is_dark", fit$model_fit$summary$term)))
+
+  additive <- vod$fit_regression(interaction = FALSE)
+  expect_false(any(grepl(":is_dark", additive$model_fit$summary$term)))
 })
 
 test_that("print.duboisR_vod_module reports initialization and chart-build state", {

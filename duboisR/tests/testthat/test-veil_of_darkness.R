@@ -71,3 +71,35 @@ test_that("fit_veil_of_darkness layers extra control terms onto the base formula
   # unselected map entries are dropped, same as build_formula()
   expect_false("median_income" %in% with_controls$model_fit$summary$term)
 })
+
+test_that("interpret_veil_regression narrates significant vs. non-significant race:is_dark terms", {
+  fake_fit <- list(
+    model_fit = list(
+      summary = tibble::tibble(
+        term = c(
+          "(Intercept)", "subject_raceblack", "subject_racehispanic", "is_darkTRUE",
+          "subject_raceblack:is_darkTRUE", "subject_racehispanic:is_darkTRUE"
+        ),
+        estimate = c(0.013, 1.954, 1.312, 1.020, 0.953, 0.868),
+        conf.low = c(0.012, 1.797, 1.237, 0.950, 0.850, 0.797),
+        conf.high = c(0.014, 2.125, 1.391, 1.096, 1.069, 0.944),
+        p.value = c(0, 0, 0, 0.588, 0.411, 0.001)
+      )
+    )
+  )
+
+  out <- interpret_veil_regression(fake_fit)
+  expect_type(out, "character")
+  expect_match(out, "hispanic drivers")
+  expect_match(out, "shrinks by about 13%")
+  expect_match(out, "unlikely to be chance")
+  expect_match(out, "black drivers")
+  expect_match(out, "crosses 1")
+})
+
+test_that("interpret_veil_regression errors informatively without interaction terms", {
+  fake_fit <- list(model_fit = list(summary = tibble::tibble(
+    term = "is_darkTRUE", estimate = 1, conf.low = 0.9, conf.high = 1.1, p.value = 0.5
+  )))
+  expect_error(interpret_veil_regression(fake_fit), "interaction = TRUE")
+})

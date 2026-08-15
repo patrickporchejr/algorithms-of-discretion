@@ -25,6 +25,7 @@ Imports:
     jsonlite,
     suncalc,
     httr2,
+    patchwork,
     stats,
     utils
 Suggests:
@@ -33,8 +34,7 @@ Suggests:
     withr,
     devtools,
     knitr,
-    rmarkdown,
-    patchwork
+    rmarkdown
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.1.0

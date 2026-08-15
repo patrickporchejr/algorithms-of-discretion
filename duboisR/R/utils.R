@@ -59,6 +59,76 @@ dubois_group_key <- function(data, cols) {
   do.call(paste, c(as.list(data[cols]), sep = "_"))
 }
 
+#' Count stops and searches per (race, group), dropping unresolved rows
+#'
+#' The single aggregation step behind both [aggregate_sufficient_statistics()]
+#' (the Threshold Test's input) and [summarize_county_search_rates()] (the
+#' Veil of Darkness search-rate chart) -- both ultimately answer "how many
+#' stops, how many of them searched, per (race, group)" from the same
+#' `search_col`. Kept as one shared helper instead of two independently
+#' hand-rolled `aggregate()` calls that could silently disagree on how an
+#' unresolved/`NA` `search_col` row is handled.
+#'
+#' @param data A data frame.
+#' @param race_col,group_col,search_col Column names.
+#' @return A data frame: `race`, `group`, `S` (rows where `search_col` is
+#'   `TRUE`), `n` (non-`NA` `search_col` rows).
+#' @keywords internal
+.dubois_count_searches <- function(data, race_col, group_col, search_col) {
+  d <- data.frame(
+    race = data[[race_col]], group = data[[group_col]],
+    S = as.integer(as.logical(data[[search_col]])), n = 1L
+  )
+  d <- d[!is.na(d$S), , drop = FALSE]
+  stats::aggregate(cbind(S, n) ~ race + group, data = d, FUN = sum)
+}
+
+#' Capitalize the first letter of each element of a character (or factor) vector
+#'
+#' Shared by every `interpret_*()` narration function so "white"/"black" read
+#' as "White"/"Black" in prose, instead of five near-identical local copies.
+#' @keywords internal
+.dubois_cap <- function(x) {
+  x <- as.character(x)
+  paste0(toupper(substr(x, 1, 1)), substr(x, 2, nchar(x)))
+}
+
+#' Add a wrapped, italicized figure caption to a plot for publication use
+#'
+#' For figures headed into a paper/report as standalone images, where the
+#' interpretation needs to travel with the image itself rather than live in
+#' surrounding prose (the Shiny dashboard's "What this data shows" text, or
+#' a CLI's console output, don't help a reader looking at just the PNG).
+#' Wraps `caption` to `width` characters and styles it like a journal
+#' figure caption (small, italic, centered) -- deliberately with no
+#' "Figure:"/"Fig. N:" label prefix, since that numbering is the paper's
+#' to assign, not this package's. Works on both a plain `ggplot` and a
+#' `patchwork` composition (e.g. [plot_outcome_threshold_comparison()]'s
+#' output) -- patchwork merges a second `plot_annotation()` call's non-NULL
+#' fields onto the first rather than replacing it, so this is safe to call
+#' even on a patchwork object that already has a title/subtitle set.
+#'
+#' @param plot A `ggplot` or `patchwork` object.
+#' @param caption Character scalar -- typically an `interpret_*()`
+#'   function's output.
+#' @param width Wrap width in characters. Default `100`.
+#' @return `plot`, with the caption added.
+#' @export
+add_figure_caption <- function(plot, caption, width = 100) {
+  wrapped <- paste(strwrap(caption, width = width), collapse = "\n")
+  cap_text <- ggplot2::element_text(hjust = 0.5, size = 9, face = "italic", lineheight = 1.15)
+  if (inherits(plot, "patchwork")) {
+    rlang::check_installed("patchwork", reason = "to caption a patchwork figure.")
+    plot + patchwork::plot_annotation(
+      caption = wrapped,
+      theme = ggplot2::theme(plot.caption = cap_text, plot.caption.position = "plot")
+    )
+  } else {
+    plot + ggplot2::labs(caption = wrapped) +
+      ggplot2::theme(plot.caption = cap_text, plot.caption.position = "plot")
+  }
+}
+
 #' Abort with a clear message if required columns are missing
 #'
 #' @param data A data frame.

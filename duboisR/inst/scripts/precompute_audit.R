@@ -23,10 +23,19 @@ cat("Loading", DATA_PATH, "...\n")
 stops_data <- readr::read_csv(DATA_PATH, show_col_types = FALSE)
 stops_data <- dubois_relevel(stops_data, "subject_race", ref = "white")
 
-# --- Everything below except the Veil of Darkness prepare step is
-# commented out while the dashboard is stripped down to just the Veil of
-# Darkness tab (see r_dashboard/app.R). Nothing currently reads these
+# --- Everything below except the Veil of Darkness prepare step and the
+# Threshold Test fit is commented out while the dashboard is stripped down
+# to the Veil of Darkness tab's two charts and the Threshold Test tab (see
+# r_dashboard/app.R, r_dashboard/R/mod_veil_of_darkness.R,
+# r_dashboard/R/mod_threshold_test.R). Nothing else currently reads these
 # artifacts. Uncomment any block to bring the corresponding tab back.
+#
+# The search-decision race:is_dark interaction GLM (previously cached here
+# as veil_search_conducted.rds) was removed from the tab -- on the frozen
+# dataset it didn't meaningfully change the picture (see
+# r_dashboard/R/mod_veil_of_darkness.R's header comment) -- so that fit is
+# no longer precomputed either. fit_veil_of_darkness() itself is still
+# exported and tested; call it directly for console/white-paper use.
 
 # glm() fit objects embed a full copy of the training data (model frame,
 # fitted values, residuals, weights -- several length-nrow(data) vectors),
@@ -38,16 +47,6 @@ stops_data <- dubois_relevel(stops_data, "subject_race", ref = "white")
 # strip_model <- function(fit) {
 #   fit$model <- NULL
 #   fit
-# }
-#
-# for (outcome in OUTCOMES) {
-#   cat("Fitting baseline regression:", outcome, "...\n")
-#   fit <- fit_audit_glm(stops_data, stats::as.formula(paste(outcome, "~ subject_race")))
-#   probs <- predicted_probabilities(fit, stops_data, "subject_race")
-#   saveRDS(
-#     list(fit = strip_model(fit), predicted_probabilities = probs),
-#     file.path(RESULTS_DIR, paste0("regression_", outcome, ".rds"))
-#   )
 # }
 
 cat("Preparing Veil of Darkness data (slow -- daylight/dark classification over the full dataset)...\n")
@@ -65,14 +64,36 @@ saveRDS(vod_prepared, file.path(RESULTS_DIR, "veil_prepared.rds"))
 #   saveRDS(vod_fit, file.path(RESULTS_DIR, paste0("veil_", outcome, ".rds")))
 # }
 #
-# cat("Fitting Threshold Test...\n")
-# # Unlike Regression/Veil, this always models search_conducted/contraband_found
-# # together -- it isn't parameterized by the sidebar's outcome or controls at
-# # all, so there's exactly one artifact, no per-outcome/per-control variants.
-# suff_stats <- aggregate_sufficient_statistics(stops_data)
-# threshold_fit <- fit_threshold_test(suff_stats)
-# saveRDS(threshold_fit, file.path(RESULTS_DIR, "threshold_test.rds"))
-#
+cat("Computing search-rate disparity by county (frequency -- how often people get searched at all)...\n")
+# Not restricted to daylight/dark, the intertwilight window, or the
+# top-counties cut below -- it's a plain descriptive ratio, not an input to
+# the Beta-distribution optimizer, so it doesn't need that stabilization.
+county_search_rates <- summarize_county_search_rates(stops_data)
+county_search_disparity <- summarize_county_search_disparity(county_search_rates)
+
+cat("Fitting Threshold Test (restricted to the 100 largest counties with >= 1000 stops)...\n")
+# Unlike Veil, this always models search_conducted/contraband_found together
+# -- it isn't parameterized by the sidebar's outcome or controls at all, so
+# there's exactly one artifact, no per-outcome/per-control variants.
+# restrict_to_top_counties() first: verified (see README/CLI --help for
+# duboisR/inst/scripts/threshold_test_cli.R) that fitting against every
+# county tends to land fit_threshold_test() on a near-degenerate,
+# barely-converged risk distribution for the sparser races -- restricting
+# to the state's highest-volume counties doesn't change the substantive
+# finding, but it does fix convergence, so that's the version cached here.
+# suff_stats is cached alongside the fit (small) so compare_outcome_threshold_test()
+# can be computed live in the Shiny module without re-deriving it from raw stops.
+threshold_stops <- restrict_to_top_counties(stops_data)
+suff_stats <- aggregate_sufficient_statistics(threshold_stops)
+threshold_fit <- fit_threshold_test(suff_stats)
+saveRDS(
+  list(
+    suff_stats = suff_stats, fit = threshold_fit,
+    county_search_rates = county_search_rates, county_search_disparity = county_search_disparity
+  ),
+  file.path(RESULTS_DIR, "threshold_test.rds")
+)
+
 # cat("Computing dataset composition...\n")
 # # Same shape as Threshold Test: fixed, not parameterized by any sidebar
 # # input, so one cached artifact.
@@ -121,7 +142,7 @@ saveRDS(vod_prepared, file.path(RESULTS_DIR, "veil_prepared.rds"))
 # saveRDS(tendentious_checks, file.path(RESULTS_DIR, "tendentious_checks.rds"))
 
 cat("Computing Veil of Darkness descriptive charts...\n")
-# Four small aggregate tables backing the dashboard's descriptive charts
+# Two small aggregate tables backing the dashboard's descriptive charts
 # (see r_dashboard/R/mod_veil_of_darkness.R) and the CLI
 # (duboisR/inst/scripts/veil_of_darkness_cli.R) -- the same
 # summarize_*() functions duboisR::veil_of_darkness_module() calls, so all
@@ -129,27 +150,21 @@ cat("Computing Veil of Darkness descriptive charts...\n")
 # path rather than three copies that can drift apart. Built on top of
 # vod_prepared$fit_data (already intertwilight-restricted and
 # daylight/dark-classified) rather than re-deriving any of that, so these
-# are cheap aggregation passes, not a repeat of the slow prepare step.
+# are cheap aggregation passes, not a repeat of the slow prepare step. Both
+# are the stop decision only now -- the search decision's frequency
+# (county_search_rates/county_search_disparity, above) and quality
+# (Threshold Test, above) both moved into threshold_test.rds; they were
+# never actually daylight/dark-restricted, so they didn't belong here.
 # Plot objects themselves aren't cached here, only the tiny aggregated
 # data -- callers build ggplot/patchwork objects live from these, which is
 # fast at this size.
 county_vod_disparity <- summarize_county_vod_disparity(vod_prepared$fit_data)
 statewide_vod <- summarize_statewide_vod(vod_prepared$fit_data)
 
-# Unlike the two tables above, this is the search decision (a separate
-# discretion point from the stop decision the VOD test targets), so it's
-# built from the full stops_data, not the intertwilight-restricted
-# vod_prepared$fit_data -- there's no reason to bind it to that clock-time
-# window.
-county_search_rates <- summarize_county_search_rates(stops_data)
-county_search_disparity <- summarize_county_search_disparity(county_search_rates)
-
 saveRDS(
   list(
     county_vod_disparity = county_vod_disparity,
-    statewide_vod = statewide_vod,
-    county_search_rates = county_search_rates,
-    county_search_disparity = county_search_disparity
+    statewide_vod = statewide_vod
   ),
   file.path(RESULTS_DIR, "vod_charts.rds")
 )

@@ -66,59 +66,67 @@ test_that("summarize_county_search_rates computes search_rate as n_searches / n_
   expect_equal(out$search_rate, 1 / 3)
 })
 
-test_that("summarize_county_search_disparity computes disparity_ratio as black/white search rate", {
-  rates <- tibble::tibble(
-    county_fips = c("48201", "48201", "48113", "48113"),
-    subject_race = c("black", "white", "black", "white"),
-    n_searches = c(20L, 10L, 5L, 5L),
-    n_total = c(100L, 100L, 100L, 100L),
-    search_rate = c(0.2, 0.1, 0.05, 0.05)
-  )
-  out <- summarize_county_search_disparity(rates)
-  out <- out[order(out$county_fips), ]
-
-  expect_equal(out$county_fips, c("48113", "48201"))
-  expect_equal(out$disparity_ratio, c(1, 2))
-})
-
-test_that("summarize_county_search_disparity drops a county missing either race", {
-  rates <- tibble::tibble(
-    county_fips = c("48201", "48113"),
-    subject_race = c("black", "white"), # each county has only one race present
-    n_searches = c(5L, 5L), n_total = c(50L, 50L), search_rate = c(0.1, 0.1)
-  )
-  out <- summarize_county_search_disparity(rates)
-  expect_equal(nrow(out), 0L)
-})
-
-test_that("plot_county_vod_disparity/plot_statewide_vod/plot_county_search_disparity return ggplot objects", {
+test_that("plot_county_vod_disparity/plot_statewide_vod return ggplot objects", {
   d <- dubois_test_stops(2000)
   prepared <- suppressWarnings(prepare_veil_of_darkness_data(d))
   vd <- prepared$fit_data
 
   cvd <- summarize_county_vod_disparity(vd)
   sw <- summarize_statewide_vod(vd)
-  csr <- summarize_county_search_rates(d)
-  csd <- summarize_county_search_disparity(csr)
 
   expect_s3_class(plot_county_vod_disparity(cvd, min_n = 1), "ggplot")
   expect_s3_class(plot_statewide_vod(sw), "ggplot")
-  expect_s3_class(plot_county_search_disparity(csd, min_n = 1), "ggplot")
 })
 
-test_that("plot_vod_search_combined returns a patchwork object combining both plots", {
-  skip_if_not_installed("patchwork")
-  d <- dubois_test_stops(2000)
-  prepared <- suppressWarnings(prepare_veil_of_darkness_data(d))
-  vd <- prepared$fit_data
-
-  cvd <- summarize_county_vod_disparity(vd)
-  csr <- summarize_county_search_rates(d)
-  csd <- summarize_county_search_disparity(csr)
-
-  combined <- plot_vod_search_combined(
-    plot_county_vod_disparity(cvd, min_n = 1),
-    plot_county_search_disparity(csd, min_n = 1)
+test_that("interpret_county_vod_disparity reads the median ratio and % of counties above daylight", {
+  d <- tibble::tibble(
+    county_fips = c("A", "B", "C"), total_n = c(100, 100, 100), vod_ratio = c(1.0, 1.04, 0.96)
   )
-  expect_s3_class(combined, "patchwork")
+  out <- interpret_county_vod_disparity(d, min_n = 30)
+  expect_type(out, "character")
+  expect_match(out, "n ≥ 30", fixed = TRUE)
+  expect_match(out, "1.00×", fixed = TRUE)
+  expect_match(out, "close to unchanged", fixed = TRUE)
 })
+
+test_that("interpret_county_vod_disparity flags a notable shift instead of 'close to unchanged'", {
+  d <- tibble::tibble(
+    county_fips = c("A", "B"), total_n = c(100, 100), vod_ratio = c(0.6, 0.6)
+  )
+  out <- interpret_county_vod_disparity(d, min_n = 30)
+  expect_match(out, "notably lower after dark", fixed = TRUE)
+})
+
+test_that("interpret_statewide_vod identifies the race with the largest before/after-dark shift", {
+  d <- tibble::tibble(
+    subject_race = c("white", "black", "hispanic"),
+    `Before dark (daylight)` = c(0.44, 0.10, 0.46),
+    `After dark` = c(0.46, 0.12, 0.42)
+  )
+  out <- interpret_statewide_vod(d)
+  expect_type(out, "character")
+  expect_match(out, "Hispanic drivers get stopped 4 points less", fixed = TRUE)
+  expect_match(out, "Black drivers get stopped 2 points more", fixed = TRUE)
+  expect_match(out, "clearest shift is Hispanic drivers, who are pulled over less at night", fixed = TRUE)
+})
+
+test_that("interpret_statewide_vod handles a factor race column (dubois_relevel's output type)", {
+  d <- tibble::tibble(
+    subject_race = factor(c("white", "black", "hispanic"), levels = c("white", "black", "hispanic")),
+    `Before dark (daylight)` = c(0.44, 0.10, 0.46),
+    `After dark` = c(0.46, 0.12, 0.42)
+  )
+  out <- interpret_statewide_vod(d)
+  expect_match(out, "Hispanic drivers get stopped 4 points less", fixed = TRUE)
+})
+
+test_that("interpret_statewide_vod flags a small largest shift as not a strong change", {
+  d <- tibble::tibble(
+    subject_race = c("white", "black"),
+    `Before dark (daylight)` = c(0.50, 0.50),
+    `After dark` = c(0.505, 0.495)
+  )
+  out <- interpret_statewide_vod(d)
+  expect_match(out, "under 2 points")
+})
+

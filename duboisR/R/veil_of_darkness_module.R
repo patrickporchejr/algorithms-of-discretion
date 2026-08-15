@@ -29,29 +29,33 @@
 #'       [compute_daylight_status()]), `$sun_times` (the distinct
 #'       date x county sunset/dusk lookup `$stops_geo` was built from),
 #'       `$vod_data` (the intertwilight-restricted subset -- see
-#'       [prepare_veil_of_darkness_data()]), and the four chart-data
-#'       tables: `$county_vod_disparity`, `$statewide_vod`,
-#'       `$county_search_rates`, `$county_search_disparity`. `config` is
-#'       reserved for future options; nothing reads it yet.}
+#'       [prepare_veil_of_darkness_data()]), and the two stop-decision
+#'       chart-data tables: `$county_vod_disparity`, `$statewide_vod`.
+#'       `config` is reserved for future options; nothing reads it yet.
+#'       This module is scoped to the stop decision only -- the search
+#'       decision's frequency/quality diagnostics
+#'       ([summarize_county_search_disparity()], [fit_threshold_test()])
+#'       aren't tied to daylight/dark at all, so they aren't part of this
+#'       stateful wrapper; call them directly.}
 #'     \item{`$plot_county_vod(min_n = 30)`}{Builds, stores as `$vod_plot`,
 #'       and returns the county VoD-ratio scatter (chart 1).}
 #'     \item{`$plot_statewide()`}{Builds, stores as `$statewide_plot` and
 #'       `$statewide_table`, and returns the statewide before/after bar
 #'       chart (chart 2).}
-#'     \item{`$plot_search_rate(min_n = 30)`}{Builds, stores as
-#'       `$search_rate_plot`, and returns the county search-rate disparity
-#'       scatter (chart 3).}
-#'     \item{`$plot_combined()`}{Builds (calling the two methods above
-#'       first if their plots aren't built yet), stores as
-#'       `$combined_plot`, and returns the side-by-side stop-vs-search
-#'       figure (chart 4).}
+#'     \item{`$fit_regression(outcome_var = "search_conducted", interaction = TRUE, control_map = list(), controls_selected = character(0))`}{
+#'       The actual Grogger-Ridgeway regression test (see
+#'       [fit_veil_of_darkness()]), not just the descriptive charts above --
+#'       stores and returns a `duboisR_vod_result`. Defaults `interaction`
+#'       to `TRUE`, the opposite of [fit_veil_of_darkness()]'s own default,
+#'       because a caller reaching for this method already wants the
+#'       `race:is_dark` term, not the additive model.}
 #'   }
 #' @examples
 #' \dontrun{
 #' vod <- veil_of_darkness_module()
 #' vod$init(data_path = "data/processed/audit_ready_stops.csv")
 #' print(vod)
-#' vod$plot_combined()
+#' vod$plot_county_vod()
 #' vod$county_vod_disparity  # the underlying table is right there too
 #' }
 #' @export
@@ -89,8 +93,6 @@ veil_of_darkness_module <- function() {
     cli::cli_inform("Aggregating chart data ...")
     self$county_vod_disparity <- summarize_county_vod_disparity(self$vod_data, race_col, county_fips_col)
     self$statewide_vod <- summarize_statewide_vod(self$vod_data, race_col)
-    self$county_search_rates <- summarize_county_search_rates(stops, "search_conducted", race_col, county_fips_col)
-    self$county_search_disparity <- summarize_county_search_disparity(self$county_search_rates, race_col, county_fips_col)
 
     self$initialized <- TRUE
     cli::cli_inform("Done -- {length(unique(self$county_vod_disparity[[county_fips_col]]))} counties ready.")
@@ -110,18 +112,14 @@ veil_of_darkness_module <- function() {
     self$statewide_plot
   }
 
-  self$plot_search_rate <- function(min_n = 30) {
+  self$fit_regression <- function(outcome_var = "search_conducted", interaction = TRUE,
+                                   control_map = list(), controls_selected = character(0)) {
     .vod_module_require_init(self)
-    self$search_rate_plot <- plot_county_search_disparity(self$county_search_disparity, min_n = min_n)
-    self$search_rate_plot
-  }
-
-  self$plot_combined <- function() {
-    .vod_module_require_init(self)
-    if (is.null(self$vod_plot)) self$plot_county_vod()
-    if (is.null(self$search_rate_plot)) self$plot_search_rate()
-    self$combined_plot <- plot_vod_search_combined(self$vod_plot, self$search_rate_plot)
-    self$combined_plot
+    self$regression_fit <- fit_veil_of_darkness(
+      self$vod_prepared, outcome_var = outcome_var, interaction = interaction,
+      control_map = control_map, controls_selected = controls_selected
+    )
+    self$regression_fit
   }
 
   structure(self, class = "duboisR_vod_module")
@@ -146,7 +144,7 @@ print.duboisR_vod_module <- function(x, ...) {
     format(nrow(x$vod_data), big.mark = ","),
     length(unique(x$county_vod_disparity[[1]]))
   ))
-  built <- c("vod_plot", "statewide_plot", "search_rate_plot", "combined_plot")
+  built <- c("vod_plot", "statewide_plot", "regression_fit")
   built <- built[vapply(built, function(f) !is.null(x[[f]]), logical(1))]
   cat("Charts built:", if (length(built) == 0) "(none yet)" else paste(built, collapse = ", "), "\n")
   invisible(x)

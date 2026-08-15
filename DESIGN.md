@@ -61,18 +61,30 @@ auditing bias has to be independently verifiable — a tested, documented,
 `?help`-able package is falsifiable in a way a pile of analysis scripts in
 a notebook is not.
 
-**Why the Veil of Darkness charts are descriptive, not a regression fit.**
+**Why the four default Veil of Darkness charts are descriptive, not a
+regression fit — and where the regression fit actually lives.**
 `duboisR` also has a regression-based version of this test
 (`fit_veil_of_darkness()`, a `race:is_dark` interaction GLM with
 closed-form Wald CIs — see `?fit_audit_glm` for why closed-form rather
 than `broom::tidy()`'s default profile-likelihood CI, which hangs at
-millions of rows) — it's exported, tested, and still the more rigorous
-answer to "did the disparity change after dark." The currently shipped
-CLI/dashboard don't call it, though: `veil_of_darkness_module()` and the
-`summarize_*()`/`plot_*()` functions it wraps are pure aggregation (base R
-`aggregate()`/`merge()`, no `glm()` call anywhere in that path), which is
-what makes them fast enough to run as a synchronous CLI command instead of
-needing a precomputed cache the way a 5.6M-row GLM fit would.
+millions of rows) — it's exported, tested, and the more rigorous answer to
+"did the disparity change after dark." `veil_of_darkness_module()`'s four
+`$plot_*()` chart methods and the `summarize_*()`/`plot_*()` functions
+they wrap are pure aggregation (base R `aggregate()`/`merge()`, no
+`glm()` call anywhere in that path) — that's what makes them fast enough
+to run synchronously by default. The regression is reachable too, just
+not folded into that fast default path: `veil_of_darkness_module()$fit_regression()`
+(defaulting `interaction = TRUE`, the opposite of `fit_veil_of_darkness()`'s
+own default, since a caller reaching for this method already wants the
+interaction term) and the CLI's `veil regression` subcommand, both opt-in
+and excluded from `veil all` for the same reason the four charts stay
+aggregation-only by default: a real `glm()` fit over the intertwilight
+subset is a materially different cost than a `aggregate()` pass, so it
+shouldn't be a cost every default `veil` invocation silently pays. The
+Shiny dashboard still doesn't call it — see `precompute_audit.R`, where
+the `fit_veil_of_darkness()` call is written but commented out alongside
+the rest of the tabs stripped from the dashboard's current single-tab
+scope.
 
 ---
 
@@ -229,12 +241,15 @@ deliberately, to avoid a new OOP-framework dependency for a thin piece of
 session state) with an `$init()` method that loads the CSV, runs the two
 steps above, and populates every intermediate table (`$stops_geo`,
 `$vod_data`, `$county_vod_disparity`, etc.) directly on the object, plus
-one `$plot_*()` method per chart that builds, caches, and returns it.
-Environments have reference semantics, so `self$field <- value` inside
-any method mutates state every other method sees immediately — no `<<-`,
-no reassigning the returned object. `duboisR/inst/scripts/veil_of_darkness_cli.R`
+one `$plot_*()` method per chart that builds, caches, and returns it, plus
+`$fit_regression()` for the interaction GLM described above. Environments
+have reference semantics, so `self$field <- value` inside any method
+mutates state every other method sees immediately — no `<<-`, no
+reassigning the returned object. `duboisR/inst/scripts/veil_of_darkness_cli.R`
 is a thin Rscript wrapper around this object (subcommand → method call →
-print the relevant table + optionally `ggsave()` the plot); the Shiny
+print the relevant table + optionally `ggsave()` the plot; `regression` →
+`$fit_regression()` is the one subcommand not folded into `all`, kept
+opt-in since it's a real `glm()` fit); the Shiny
 dashboard's `mod_veil_of_darkness.R` calls the plain `summarize_*()`/`plot_*()`
 functions directly instead (it already has `results/vod_charts.rds`
 precomputed, so it doesn't need `$init()`'s CSV-loading step) — both front

@@ -16,12 +16,14 @@
 
 COMMANDS <- list(
   veil = "veil_of_darkness_cli.R",
+  threshold = "threshold_test_cli.R",
   datasheet = "seed_demo_datasheet.R",
   grounding = "run_grounding_experiment.R"
 )
 
 COMMAND_DESCRIPTIONS <- c(
   veil = "Veil of Darkness charts (county / statewide / search / combined / all)",
+  threshold = "Threshold Test + naive outcome-test comparison charts (fit / compare / all)",
   datasheet = "Seed a first-pass datasheet.json for the processed dataset",
   grounding = "Run the naive-vs-grounded LLM datasheet-grounding experiment"
 )

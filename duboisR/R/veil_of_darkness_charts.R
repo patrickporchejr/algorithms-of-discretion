@@ -1,11 +1,20 @@
 # Descriptive (non-regression) Veil of Darkness charts: a purely
 # share/ratio view of the same daylight/dark comparison
-# fit_veil_of_darkness() tests with a GLM, plus the search-rate disparity
-# (a separate, post-stop discretion point) alongside it for scale
-# comparison. Every function here takes already-prepared data (see
+# fit_veil_of_darkness() tests with a GLM -- the stop decision only. Every
+# function here takes already-prepared data (see
 # prepare_veil_of_darkness_data()) rather than doing any daylight
 # classification itself -- that stays a single, tested code path in
 # veil_of_darkness.R.
+#
+# Search-rate disparity (summarize_county_search_rates()) used to live in
+# this file too, paired with the VoD-ratio chart for a "does the disparity
+# concentrate in the stop or the search" comparison. It moved out: search
+# rate isn't restricted to daylight/dark or the intertwilight window at all
+# -- its only tie to Veil of Darkness was that comparison framing, and it
+# belongs with the rest of the search-decision diagnostics instead (see
+# duboisR/R/threshold_test.R -- summarize_county_search_rates() itself still
+# lives here since it's a generic aggregation, not VoD-specific, but its
+# disparity/plot/interpret functions are threshold_test.R's now).
 
 #' Aggregate county-level Veil of Darkness stop-share ratios
 #'
@@ -88,48 +97,14 @@ summarize_statewide_vod <- function(vod_data, race_col = "subject_race") {
 summarize_county_search_rates <- function(data, outcome_var = "search_conducted",
                                            race_col = "subject_race", county_col = "county_fips") {
   abort_if_missing_cols(data, c(outcome_var, race_col, county_col))
-  d <- data.frame(
-    county = data[[county_col]], race = data[[race_col]],
-    searched = as.integer(as.logical(data[[outcome_var]])), n = 1L
-  )
-  d <- d[!is.na(d$searched), , drop = FALSE]
-
-  agg <- stats::aggregate(cbind(searched, n) ~ county + race, data = d, FUN = sum)
-  agg$search_rate <- agg$searched / agg$n
-  names(agg)[names(agg) == "searched"] <- "n_searches"
+  agg <- .dubois_count_searches(data, race_col, county_col, outcome_var)
+  agg$search_rate <- agg$S / agg$n
+  names(agg)[names(agg) == "S"] <- "n_searches"
   names(agg)[names(agg) == "n"] <- "n_total"
-  names(agg)[names(agg) == "county"] <- county_col
   names(agg)[names(agg) == "race"] <- race_col
+  names(agg)[names(agg) == "group"] <- county_col
 
   tibble::as_tibble(agg[order(agg[[county_col]], agg[[race_col]]), ])
-}
-
-#' Aggregate county-level search-rate disparity (post-stop discretion)
-#'
-#' Pivots [summarize_county_search_rates()]'s long output to black/white
-#' side by side and computes their ratio -- the same shape as
-#' [summarize_county_vod_disparity()], so the two are directly comparable
-#' (see [plot_vod_search_combined()]).
-#'
-#' @param county_search_rates Output of [summarize_county_search_rates()].
-#' @inheritParams summarize_county_vod_disparity
-#' @return A tibble, one row per county: `<county_col>`,
-#'   `n_searches_black`/`n_searches_white`,
-#'   `search_rate_black`/`search_rate_white`,
-#'   `disparity_ratio` (`search_rate_black / search_rate_white`).
-#' @export
-summarize_county_search_disparity <- function(county_search_rates, race_col = "subject_race",
-                                               county_col = "county_fips") {
-  abort_if_missing_cols(county_search_rates, c(race_col, county_col, "n_searches", "search_rate"))
-  black <- county_search_rates[county_search_rates[[race_col]] == "black", c(county_col, "n_searches", "search_rate")]
-  white <- county_search_rates[county_search_rates[[race_col]] == "white", c(county_col, "n_searches", "search_rate")]
-  names(black)[-1] <- paste0(names(black)[-1], "_black")
-  names(white)[-1] <- paste0(names(white)[-1], "_white")
-
-  wide <- merge(black, white, by = county_col)
-  wide$disparity_ratio <- wide$search_rate_black / wide$search_rate_white
-
-  tibble::as_tibble(wide[order(wide[[county_col]]), ])
 }
 
 #' Plot the county-level Veil of Darkness ratio (chart 1)
@@ -152,6 +127,37 @@ plot_county_vod_disparity <- function(county_vod_disparity, min_n = 30) {
     )
 }
 
+#' Plain-language interpretation of the county-level VoD ratio scatter
+#'
+#' Reads the actual per-county ratios behind [plot_county_vod_disparity()]
+#' and narrates them -- the median county's ratio, and how many counties
+#' lean each direction -- rather than restating what the chart is
+#' generically about.
+#'
+#' @inheritParams plot_county_vod_disparity
+#' @return A character scalar (one paragraph).
+#' @export
+interpret_county_vod_disparity <- function(county_vod_disparity, min_n = 30) {
+  abort_if_missing_cols(county_vod_disparity, c("total_n", "vod_ratio"))
+  d <- county_vod_disparity[county_vod_disparity$total_n >= min_n, ]
+
+  med <- stats::median(d$vod_ratio, na.rm = TRUE)
+  pct_above <- round(100 * mean(d$vod_ratio > 1, na.rm = TRUE))
+
+  reading <- if (abs(med - 1) < 0.1) {
+    "close to unchanged -- consistent with race not driving much of who gets pulled over in the typical county"
+  } else if (med > 1) {
+    "notably higher after dark than in daylight -- a shift consistent with race shaping who gets pulled over"
+  } else {
+    "notably lower after dark than in daylight -- a shift consistent with race shaping who gets pulled over"
+  }
+
+  sprintf(
+    "Across counties with enough stops to compare (n ≥ %d), the typical county's Black share of stops after dark is %.2f× what it is in daylight (%d%% of counties are higher than daylight) -- %s.",
+    min_n, med, pct_above, reading
+  )
+}
+
 #' Plot statewide racial composition of stops, before vs. after dark (chart 2)
 #'
 #' @param statewide_vod Output of [summarize_statewide_vod()].
@@ -170,11 +176,56 @@ plot_statewide_vod <- function(statewide_vod, race_col = "subject_race") {
     ggplot2::geom_col(position = "dodge") +
     ggplot2::scale_y_continuous(labels = function(x) paste0(round(100 * x), "%")) +
     ggplot2::labs(
-      title = "Racial composition of stops: before vs. after dark",
-      subtitle = "Inter-twilight window only",
+      title = "Who gets stopped, before vs. after dark",
+      subtitle = "Same clock-hour window on every date -- darkness is the only thing that changes",
       x = NULL, y = "Share of stops", fill = NULL
     ) +
     ggplot2::theme(legend.position = "top")
+}
+
+#' Plain-language interpretation of the statewide before/after-dark composition shift
+#'
+#' Reads the actual point estimates off [summarize_statewide_vod_table()]
+#' and narrates them — which race's share of stops moves the most across
+#' the daylight/dark boundary, and in which direction — rather than
+#' restating what [plot_statewide_vod()] is generically about.
+#'
+#' @param statewide_vod_table Output of [summarize_statewide_vod_table()].
+#' @inheritParams summarize_statewide_vod_table
+#' @return A character scalar (one paragraph).
+#' @export
+interpret_statewide_vod <- function(statewide_vod_table, race_col = "subject_race") {
+  before_col <- "Before dark (daylight)"
+  after_col <- "After dark"
+  abort_if_missing_cols(statewide_vod_table, c(race_col, before_col, after_col))
+
+  d <- statewide_vod_table
+  d$delta <- d[[after_col]] - d[[before_col]]
+  d <- d[order(-abs(d$delta)), ]
+
+  pct <- function(x) paste0(round(100 * x), "%")
+  more_or_less <- function(delta) if (delta > 0) "more" else if (delta < 0) "less" else "the same amount"
+
+  race_sentences <- vapply(seq_len(nrow(d)), function(i) {
+    sprintf(
+      "%s drivers get stopped %d points %s (from %s to %s)",
+      .dubois_cap(d[[race_col]][i]), round(100 * abs(d$delta[i])), more_or_less(d$delta[i]),
+      pct(d[[before_col]][i]), pct(d[[after_col]][i])
+    )
+  }, character(1))
+
+  top <- d[1, ]
+  top_direction <- if (top$delta > 0) "pulled over more" else if (top$delta < 0) "pulled over less" else "pulled over about the same amount"
+  small_shift_note <- if (abs(top$delta) < 0.02) {
+    " -- though even that shift is under 2 points, so this data doesn't show a strong composition change either way"
+  } else {
+    ""
+  }
+
+  sprintf(
+    "%s. The clearest shift is %s drivers, who are %s at night%s.",
+    paste(race_sentences, collapse = "; "), .dubois_cap(top[[race_col]]), top_direction, small_shift_note
+  )
 }
 
 #' Pivot the statewide before/after shares to one row per race
@@ -194,46 +245,3 @@ summarize_statewide_vod_table <- function(statewide_vod, race_col = "subject_rac
   tibble::as_tibble(merge(before, after, by = race_col))
 }
 
-#' Plot county-level search-rate disparity (chart 3)
-#'
-#' @param county_search_disparity Output of
-#'   [summarize_county_search_disparity()].
-#' @param min_n Minimum `n_searches_black`/`n_searches_white` for a county
-#'   to be plotted. Default `30`.
-#' @return A `ggplot`.
-#' @export
-plot_county_search_disparity <- function(county_search_disparity, min_n = 30) {
-  abort_if_missing_cols(county_search_disparity, c("n_searches_black", "n_searches_white", "disparity_ratio"))
-  plot_data <- county_search_disparity[
-    county_search_disparity$n_searches_black >= min_n & county_search_disparity$n_searches_white >= min_n,
-  ]
-  ggplot2::ggplot(plot_data, ggplot2::aes(x = .data$n_searches_black + .data$n_searches_white, y = .data$disparity_ratio)) +
-    ggplot2::geom_point() +
-    ggplot2::geom_hline(yintercept = 1, linetype = "dashed") +
-    ggplot2::scale_x_log10() +
-    ggplot2::labs(
-      title = "Search rate (post-stop discretion)",
-      x = "Total searches (log scale)",
-      y = "Black:White search rate ratio"
-    )
-}
-
-#' Combine the county VoD-ratio and search-rate plots side by side (chart 4)
-#'
-#' "Where does the racial disparity concentrate: the stop, or the search?"
-#' -- the same two charts ([plot_county_vod_disparity()] and
-#' [plot_county_search_disparity()]) placed next to each other via
-#' `patchwork`, rather than rebuilt, so this is never out of sync with the
-#' standalone versions of either chart.
-#'
-#' @param vod_plot A `ggplot` from [plot_county_vod_disparity()].
-#' @param search_plot A `ggplot` from [plot_county_search_disparity()].
-#' @param title,subtitle Passed to `patchwork::plot_annotation()`.
-#' @return A `patchwork` object.
-#' @export
-plot_vod_search_combined <- function(vod_plot, search_plot,
-                                      title = "Where does the racial disparity concentrate: the stop, or the search?",
-                                      subtitle = "Each point is a county. Dashed line = parity (ratio of 1).") {
-  rlang::check_installed("patchwork", reason = "to combine these two plots side by side.")
-  vod_plot + search_plot + patchwork::plot_annotation(title = title, subtitle = subtitle)
-}

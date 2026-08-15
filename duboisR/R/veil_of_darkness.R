@@ -287,5 +287,55 @@ plot.duboisR_vod_result <- function(x, ...) {
     ggplot2::geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
     ggplot2::coord_flip() +
     ggplot2::theme_minimal(base_size = 14) +
-    ggplot2::labs(x = "", y = "Adjusted Odds Ratio (95% CI)", title = "Veil of Darkness: dark vs. daylight")
+    ggplot2::labs(
+      x = "", y = "Adjusted Odds Ratio (95% CI)",
+      title = "Does the search-rate gap shrink once officers can't see race?",
+      subtitle = "race:is_dark terms left of the dashed line = that race's gap shrinks after dark"
+    )
+}
+
+#' Plain-language interpretation of the race:is_dark interaction terms
+#'
+#' Reads the actual fitted odds ratios and confidence intervals for every
+#' `<race>:is_dark` interaction term off a `duboisR_vod_result` (see
+#' [fit_veil_of_darkness()]) and narrates them — which race's search-rate
+#' gap shrinks after dark, by about how much, and whether that's
+#' distinguishable from no change given the confidence interval — rather
+#' than restating what `plot.duboisR_vod_result()` is generically about.
+#'
+#' @param vod_result Output of [fit_veil_of_darkness()] (or
+#'   [veil_of_darkness_test()]), fit with `interaction = TRUE`.
+#' @param race_col String race column the model was fit against. Default
+#'   `"subject_race"`.
+#' @return A character scalar (one paragraph).
+#' @export
+interpret_veil_regression <- function(vod_result, race_col = "subject_race") {
+  summary_tbl <- vod_result$model_fit$summary
+  interaction_rows <- summary_tbl[grepl(":is_dark", summary_tbl$term, fixed = TRUE), , drop = FALSE]
+  if (nrow(interaction_rows) == 0) {
+    rlang::abort("vod_result has no race:is_dark interaction terms -- was it fit with interaction = TRUE?")
+  }
+
+  race_label <- function(term) sub(":is_dark.*$", "", sub(paste0("^", race_col), "", term))
+
+  sentences <- vapply(seq_len(nrow(interaction_rows)), function(i) {
+    row <- interaction_rows[i, ]
+    race <- race_label(row$term)
+    pct_change <- round(100 * abs(1 - row$estimate))
+    significant <- row$conf.low > 1 || row$conf.high < 1
+
+    direction <- if (row$estimate < 1) {
+      sprintf("shrinks by about %d%% after dark", pct_change)
+    } else {
+      sprintf("actually grows by about %d%% after dark", pct_change)
+    }
+    certainty <- if (significant) {
+      "a difference the confidence interval says is unlikely to be chance"
+    } else {
+      "though the confidence interval crosses 1, so this data can't rule out no real change"
+    }
+    sprintf("%s drivers' search-rate gap versus the reference race %s (%s)", race, direction, certainty)
+  }, character(1))
+
+  paste0(paste(sentences, collapse = "; "), ".")
 }

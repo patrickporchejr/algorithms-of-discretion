@@ -1,15 +1,10 @@
 # Algorithms of Discretion
 
-A Veil of Darkness audit of racial disparity in Texas traffic stops (2015–2017): does the racial mix of who gets stopped change once officers can't see a driver's race clearly (i.e., after dusk)?
-
 This repository is the applied computational engine for the white paper:
 
 > **The Algorithmic Color Line: Auditing "Algorithms of Discretion" via QuantCrit and Du Boisian Sociology**  
 > _By: Patrick Eugene Porché Jr._  
 > [SocArXiv preprint](https://osf.io/preprints/socarxiv) (placeholder link until this paper's own preprint is posted)
-
-By examining data science in tandem with W.E.B. Du Bois's _double consciousness_ and Ruha Benjamin's _Race After Technology_, this project demonstrates how administrative police data (and the machine learning models trained on it) encode historical enforcement discretion rather than underlying driver behavior.
-
 ---
 
 ## What this is
@@ -18,10 +13,10 @@ Three pieces, one file-based pipeline:
 
 - **Data Pipeline (Python, `python/`):** ingests Texas traffic-stop records from the Stanford Open Policing Project and performs spatial joins on County FIPS.
 - **`duboisR` (R package, `duboisR/`):** the Veil of Darkness natural-experiment test (Grogger & Ridgeway 2006) — sunset/dusk classification via `suncalc`, the intertwilight-hour design that makes the comparison valid, and the descriptive charts built on top of it. Also implements the Datasheets-for-Datasets provenance scaffolding and the LLM datasheet-grounding experiment that two of the CLI's three programs (below) drive.
-- **Shiny Dashboard (`r_dashboard/`):** a browser front end onto the precomputed Veil of Darkness charts (see [The Veil of Darkness dashboard](#the-veil-of-darkness-dashboard)).
-- **CLI (`duboisR/inst/scripts/`):** three Rscript entry points — Veil of Darkness charts, the datasheet generator, and the LLM grounding test (see [Command-line interface](#command-line-interface)).
+- **Shiny Dashboard (`r_dashboard/`):** a browser front end onto the precomputed Veil of Darkness and Threshold Test charts (see [The Veil of Darkness dashboard](#the-veil-of-darkness-dashboard) / [The Threshold Test dashboard](#the-threshold-test-dashboard)).
+- **CLI (`duboisR/inst/scripts/`):** four Rscript entry points — Veil of Darkness charts, the Threshold Test (+ naive outcome-test comparison), the datasheet generator, and the LLM grounding test (see [Command-line interface](#command-line-interface)).
 
-`duboisR` also implements several other diagnostics from its broader Wells-Du Bois Protocol design (a Threshold Test approximation, identity-proxy/tendentious-outcome checks, subpopulation disparity disaggregation) — exported and tested, but not part of the currently shipped dashboard/CLI surface this README documents. `?function_name` after `devtools::load_all("duboisR")` covers all of it if you go looking.
+`duboisR` also implements several other diagnostics from its broader Wells-Du Bois Protocol design (identity-proxy/tendentious-outcome checks, subpopulation disparity disaggregation) — exported and tested, but not part of the currently shipped dashboard/CLI surface this README documents. `?function_name` after `devtools::load_all("duboisR")` covers all of it if you go looking.
 
 ---
 
@@ -53,12 +48,12 @@ Administrative datasets reflect institutional policing practices rather than raw
 ├── data/
 │   ├── raw/                 # Stanford Open Policing CSVs (gitignored)
 │   └── processed/           # Merged, analysis-ready dataset (gitignored)
-├── results/                 # Precomputed vod_charts.rds the dashboard/CLI read (gitignored)
+├── results/                 # Precomputed vod_charts.rds / threshold_test.rds the dashboard/CLI read (gitignored)
 ├── python/                  # Data acquisition, cleaning, spatial join
 ├── duboisR/                 # R package: the Wells-Du Bois Protocol diagnostic engine
 │   ├── R/                   # veil_of_darkness.R (+ _charts.R / _module.R), glm_utils.R, datasheet*.R, grounding_experiment.R, ...
 │   ├── inst/extdata/        # bundled TX county centroids (Veil of Darkness geodata)
-│   ├── inst/scripts/        # cli.R (single entry point), precompute_audit.R, + the 3 scripts cli.R dispatches to
+│   ├── inst/scripts/        # cli.R (single entry point), precompute_audit.R, + the 4 scripts cli.R dispatches to
 │   ├── tests/testthat/      # unit + parameter-recovery tests
 │   └── vignettes/           # theoretical grounding (QuantCrit, Du Bois, Wells)
 ├── r_dashboard/             # Shiny app: the Veil of Darkness dashboard (consumes duboisR)
@@ -91,10 +86,11 @@ curl -L -o data/raw/tx_statewide_2020_04_01.csv.zip \
 #    precompute. `make` only reruns steps whose inputs actually changed --
 #    see `make -n all results` to preview what would run.
 make all       # -> data/processed/audit_ready_stops.csv (~5.6M rows)
-make results   # -> results/vod_charts.rds (~2min, mostly the sunset/dusk pass
-               #    over the full dataset -- see duboisR/inst/scripts/precompute_audit.R)
+make results   # -> results/vod_charts.rds + results/threshold_test.rds (~2min, mostly
+               #    the sunset/dusk pass over the full dataset -- see
+               #    duboisR/inst/scripts/precompute_audit.R)
 
-# 6. Run the dashboard -- it renders results/vod_charts.rds, it does not fit anything live
+# 6. Run the dashboard -- it renders the precomputed results/ artifacts, it does not fit anything live
 cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 ```
 
@@ -102,14 +98,30 @@ cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 
 ## The Veil of Darkness dashboard
 
-`r_dashboard/app.R` renders four descriptive charts, all built from `results/vod_charts.rds` via `duboisR`'s `summarize_*()`/`plot_*()` functions (`?plot_county_vod_disparity`, `?plot_statewide_vod`, `?plot_county_search_disparity`, `?plot_vod_search_combined`) — the same functions the CLI below calls, so the dashboard and CLI always render identically:
+`r_dashboard/app.R` renders two descriptive charts, both about the *stop* decision only, built from `results/vod_charts.rds` via `duboisR`'s `summarize_*()`/`plot_*()` functions (`?plot_statewide_vod`, `?plot_county_vod_disparity`) — the same functions the CLI below calls, so the dashboard and CLI always render identically:
 
-1. **County-level Veil of Darkness ratio** — each county's black share of inter-twilight stops, dark ÷ daylight. Near 1 across most counties is the descriptive signature the Grogger-Ridgeway hypothesis predicts if the *stop* decision isn't strongly race-driven.
-2. **Statewide before/after comparison** — each race's share of stops, compared directly across the daylight/dark boundary.
-3. **Search-rate disparity by county** — the *search* decision (a separate discretion point, once a stop has already happened), not restricted to the intertwilight window.
-4. **Both mechanisms side by side** — charts 1 and 3 combined via `patchwork`, to compare where a racial disparity concentrates: the stop itself, or what happens once a stop has been made.
+1. **Statewide before/after comparison** — each race's share of stops, compared directly across the daylight/dark boundary.
+2. **County-level Veil of Darkness ratio** — each county's Black share of inter-twilight stops, dark ÷ daylight. Near 1 across most counties is the descriptive signature the Grogger-Ridgeway hypothesis predicts if the *stop* decision isn't strongly race-driven.
 
-`duboisR` also ships a regression-based version of this test (`fit_veil_of_darkness()`, `race:is_dark` interaction model with closed-form Wald CIs — see `?fit_veil_of_darkness`) — exported and tested, but not part of the currently rendered dashboard/CLI, which are purely descriptive (no model fitting).
+The *search* decision (a separate discretion point, once a stop has already happened) used to live on this tab too — a search-rate-disparity chart, plus a "both mechanisms side by side" combined chart. Both moved to [the Threshold Test dashboard](#the-threshold-test-dashboard): search rate was never actually restricted to daylight/dark or the intertwilight window, so it didn't belong under Veil of Darkness — it belongs with the rest of the search-decision diagnostics.
+
+`duboisR` also ships a regression-based version of this test (`fit_veil_of_darkness()`, `race:is_dark` interaction model with closed-form Wald CIs — see `?fit_veil_of_darkness`) — exported and tested, but not part of the currently rendered dashboard/CLI, which are purely descriptive (no model fitting). It previously had its own dashboard section and CLI subcommand (the search decision's `race:is_dark` interaction GLM); both were removed after review — on the frozen dataset the fit didn't show anything that changed the picture, and the search decision is a structurally weaker Veil of Darkness test than the stop decision anyway (by the time an officer decides whether to search, they've typically already had close-up contact with the driver, so "was the original stop made after dark" is a shakier stand-in for "could the officer see race at *this* decision"). Call `fit_veil_of_darkness()` directly from the console if you want it.
+
+---
+
+## The Threshold Test dashboard
+
+`r_dashboard/app.R`'s second tab — everything about the *search* decision, in order: how often people get searched (frequency), then how justified those searches are (quality/evidentiary bar). Built from `results/threshold_test.rds` (a cached `list(suff_stats =, fit =, county_search_rates =, county_search_disparity =)` — see `duboisR/inst/scripts/precompute_audit.R`) via the same `duboisR` functions the [Threshold Test CLI](#threshold-test) calls, so the dashboard and CLI always render identically:
+
+1. **Search-rate disparity by county** ([`summarize_county_search_disparity()`](duboisR/R/threshold_test.R) + `plot_county_search_disparity()`) — every race's search rate vs. a reference race (default white), one dot per county. A pure frequency comparison — how *often* someone gets searched, not whether the search finds anything. Covers every race in the data (Black **and** Hispanic vs. White), not just a hardcoded pair.
+2. **Threshold Test fit** ([`fit_threshold_test()`](duboisR/R/threshold_test.R) + `plot.duboisR_threshold_fit()`) — each county's search rate vs. hit rate, with a fitted Beta risk-distribution curve per race (in the spirit of Simoiu, Corbett-Davies & Goel 2017's infra-marginality correction). A race whose fitted `(a, b)` is near-degenerate gets a dashed curve, flagged in the subtitle — that's a caution about the fit, not a reference line.
+3. **Naive outcome test vs. corrected estimate** ([`compare_outcome_threshold_test()`](duboisR/R/threshold_test.R) + `plot_outcome_threshold_comparison()`) — the classic (Ayres 2002) pooled hit-rate gap next to the Threshold Test's inferred-threshold gap, plus the underlying comparison table (`hit_rate_gap`, `threshold_gap`, `agrees_in_direction`).
+
+Every panel is followed by a plain-language interpretation generated from the actual numbers (`interpret_search_rate_disparity()` / `interpret_threshold_fit()` / `interpret_outcome_threshold_comparison()`), not static copy — same pattern as the Veil of Darkness tab.
+
+On the frozen dataset: the typical county searches Black drivers at ~2.5× the rate of White drivers and Hispanic drivers at ~1.6× (chart 1) — but chart 3 shows Black drivers' hit rate is essentially identical to White drivers' once searched, while Hispanic drivers' hit rate is ~15 points lower under *both* the naive and corrected methods. Read together: the Black disparity concentrates in *whether* a search happens at all, not its evidentiary quality; the Hispanic disparity is the opposite — a genuinely lower bar for triggering a search in the first place.
+
+Chart 2/3's fit restricts to the 100 largest counties with ≥1000 stops (`restrict_to_top_counties()`) before fitting — fitting against every county left the sparser races' `(a, b)` non-convergent; restricting doesn't change the substantive finding (Hispanic drivers' inferred threshold stays meaningfully lower than white/Black drivers' either way), it just fixes convergence. Chart 1 is **not** restricted this way — a plain descriptive ratio doesn't need that stabilization. See [Threshold Test](#threshold-test) below for the CLI's `--county-min-stops`/`--top-n-counties` flags if you want a different cut.
 
 ---
 
@@ -123,15 +135,16 @@ Rscript duboisR/inst/scripts/cli.R <command> [options]
 
 | Command     | What it does                                                      |
 | ----------- | -------------------------------------------------------------------- |
-| `veil`      | Print/save the four Veil of Darkness charts (see below)            |
+| `veil`      | Print/save the two stop-decision Veil of Darkness charts (see below) |
+| `threshold` | Search-rate disparity, the Threshold Test, and its naive-outcome-test comparison (see below) |
 | `datasheet` | Seed a first-pass `datasheet.json` for the processed dataset       |
 | `grounding` | Run the naive-vs-grounded LLM datasheet-grounding experiment       |
 
-`Rscript duboisR/inst/scripts/cli.R --help` lists all three; `Rscript duboisR/inst/scripts/cli.R <command> --help` prints that command's own options — every command supports `--help`. Each command is also its own independently runnable script (`Rscript duboisR/inst/scripts/veil_of_darkness_cli.R ...`, etc., named in each subsection below) — `cli.R <command> [options]` is a thin dispatcher onto the exact same script with the exact same options, not a separate implementation, so either form does the same thing.
+`Rscript duboisR/inst/scripts/cli.R --help` lists all four; `Rscript duboisR/inst/scripts/cli.R <command> --help` prints that command's own options — every command supports `--help`. Each command is also its own independently runnable script (`Rscript duboisR/inst/scripts/veil_of_darkness_cli.R ...`, etc., named in each subsection below) — `cli.R <command> [options]` is a thin dispatcher onto the exact same script with the exact same options, not a separate implementation, so either form does the same thing.
 
 ### Veil of Darkness charts
 
-`veil` (`duboisR/inst/scripts/veil_of_darkness_cli.R`), a thin wrapper around `duboisR::veil_of_darkness_module()` (see `?duboisR::veil_of_darkness_module`), loads the processed data, classifies daylight/dark status, and prints/saves each of the four charts above.
+`veil` (`duboisR/inst/scripts/veil_of_darkness_cli.R`), a thin wrapper around `duboisR::veil_of_darkness_module()` (see `?duboisR::veil_of_darkness_module`), loads the processed data, classifies daylight/dark status, and prints/saves each of the two stop-decision charts above. (The search decision's charts moved to the [Threshold Test](#threshold-test) CLI command — see that section.)
 
 ```bash
 Rscript duboisR/inst/scripts/cli.R veil [subcommand] [options]
@@ -139,13 +152,11 @@ Rscript duboisR/inst/scripts/cli.R veil [subcommand] [options]
 
 **Subcommands** (positional; default `all` if omitted):
 
-| Subcommand  | What it prints                                   | PNG written (`--out`)  |
-| ----------- | ------------------------------------------------- | ----------------------- |
-| `county`    | Chart 1's table (`total_n >= --min-n` only)       | `vod_county.png`        |
-| `statewide` | Chart 2's before/after table, one row per race    | `vod_statewide.png`     |
-| `search`    | Chart 3's table (both race counts `>= --min-n`)   | `vod_search_rate.png`   |
-| `combined`  | A one-line pointer to `county`/`search` for numbers | `vod_combined.png`    |
-| `all`       | Runs all four of the above, in that order          | all four files above  |
+| Subcommand   | What it prints                                   | PNG written (`--out`)  |
+| ------------ | ------------------------------------------------- | ----------------------- |
+| `county`     | Chart 1's table (`total_n >= --min-n` only)       | `vod_county.png`        |
+| `statewide`  | Chart 2's before/after table, one row per race    | `vod_statewide.png`     |
+| `all`        | Runs both of the above, in that order | both files above  |
 
 Every subcommand also prints a one-line `<duboisR_vod_module>` summary (rows loaded, inter-twilight rows, county count) before its own output — that's `print(vod)` under the hood, same object as the console usage below.
 
@@ -155,12 +166,12 @@ Every subcommand also prints a one-line `<duboisR_vod_module>` summary (rows loa
 | -------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `--data=<path>` | `data/processed/audit_ready_stops.csv`   | Path to the processed CSV, resolved relative to wherever you run the script from.             |
 | `--out=<dir>`   | `.` (current directory)                  | Directory PNGs are written into; created if it doesn't exist. Pass `--out=` (empty) to print to the console only and skip `ggsave()` entirely. |
-| `--min-n=<int>` | `30`                                     | Minimum county sample size for the two scatter charts (`county`'s `total_n`, `search`'s per-race `n_searches`) — counties below this are dropped from both the printed table and the plot, same threshold `plot_county_vod_disparity()`/`plot_county_search_disparity()` take directly. |
+| `--min-n=<int>` | `30`                                     | Minimum county sample size for the county-level scatter chart (`county`'s `total_n`) — counties below this are dropped from both the printed table and the plot, same threshold `plot_county_vod_disparity()` takes directly. |
 
 `--help`/`-h` (checked before anything else runs, so it works even without a processed dataset on disk) prints the same subcommand/option reference as a plain usage string and exits.
 
 ```bash
-# All four charts, defaults everywhere:
+# Both charts, defaults everywhere:
 Rscript duboisR/inst/scripts/cli.R veil
 
 # Just the county-level scatter, a higher min-county-size cutoff, saved
@@ -201,8 +212,8 @@ vod$init(data_path = "data/processed/audit_ready_stops.csv")
 | `$vod_data`                | The intertwilight-restricted subset (`prepare_veil_of_darkness_data()$fit_data`) |
 | `$county_vod_disparity`    | Chart 1's table                                                             |
 | `$statewide_vod`           | Chart 2's table                                                             |
-| `$county_search_rates`     | Long-format search rates, one row per (county, race)                       |
-| `$county_search_disparity` | Chart 3's table (pivoted, with `disparity_ratio`)                          |
+
+Search rate (`summarize_county_search_rates()`/`summarize_county_search_disparity()`) isn't part of this module -- it was never tied to daylight/dark classification, so call those functions directly instead (see [Threshold Test](#threshold-test)).
 
 Then, one method per chart — each builds, stores, and returns:
 
@@ -210,15 +221,71 @@ Then, one method per chart — each builds, stores, and returns:
 | --------------------------------- | ---------------------- | ----------------------------- |
 | `$plot_county_vod(min_n = 30)`    | `$vod_plot`            | —                              |
 | `$plot_statewide()`               | `$statewide_plot`      | `$statewide_table`            |
-| `$plot_search_rate(min_n = 30)`   | `$search_rate_plot`    | —                              |
-| `$plot_combined()`                | `$combined_plot`       | calls the two `min_n = 30` methods above first if their plots aren't built yet |
+| `$fit_regression(outcome_var = "search_conducted", interaction = TRUE, control_map = list(), controls_selected = character(0))` | `$regression_fit` | the actual `race:is_dark` interaction GLM (see [`fit_veil_of_darkness()`](duboisR/R/veil_of_darkness.R)) — `interaction` defaults to `TRUE` here (the opposite of `fit_veil_of_darkness()`'s own default), since a caller reaching for this method already wants the interaction term, not the additive model |
 
 ```r
 print(vod)                    # <duboisR_vod_module> summary + which charts are built
-vod$plot_combined()           # chart 4, also stored as vod$combined_plot
+vod$plot_county_vod()          # chart 1, also stored as vod$vod_plot
 vod$county_vod_disparity      # the underlying table is right there too
 vod$plot_county_vod(min_n = 50)  # rebuild chart 1 with a different cutoff any time
+vod$fit_regression()          # the race:is_dark interaction GLM, also stored as vod$regression_fit
+print(vod$regression_fit)     # coefficient table (odds ratios) + caveats
+plot(vod$regression_fit)      # forest plot of the is_dark/interaction terms
 ```
+
+### Threshold Test
+
+`threshold` (`duboisR/inst/scripts/threshold_test_cli.R`) covers everything about the search decision: how often people get searched by race ([`summarize_county_search_disparity()`](duboisR/R/threshold_test.R)), the fast Threshold Test approximation for infra-marginality ([`fit_threshold_test()`](duboisR/R/threshold_test.R), in the spirit of Simoiu, Corbett-Davies & Goel 2017) against `search_conducted`/`contraband_found`, and the classic (Ayres 2002) outcome test computed on the same sufficient statistics ([`compare_outcome_threshold_test()`](duboisR/R/threshold_test.R)) — the naive baseline the Threshold Test corrects for infra-marginality.
+
+```bash
+Rscript duboisR/inst/scripts/cli.R threshold [subcommand] [options]
+```
+
+**Subcommands** (positional; default `all` if omitted):
+
+| Subcommand | What it prints                                                          | PNG written (`--out`)              |
+| ---------- | -------------------------------------------------------------------------- | ------------------------------------- |
+| `search`   | Search-rate disparity by county, every race vs. `--reference-race` (a frequency comparison, not restricted to `--county-min-stops`/`--top-n-counties` below) | `search_rate_disparity.png`        |
+| `fit`      | Per-race `(a, b)`/threshold summary                                     | `threshold_test.png`               |
+| `compare`  | The comparison table (`hit_rate`/`hit_rate_gap` vs. `mean_threshold_weighted`/`threshold_gap`, plus `agrees_in_direction`) | `outcome_threshold_comparison.png` |
+| `all`      | All three of the above, in that order (default)                          | all three files above              |
+
+**Options:**
+
+| Flag                      | Default                                | Meaning                                                                                     |
+| ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `--data=<path>`           | `data/processed/audit_ready_stops.csv` | Path to the processed CSV.                                                                    |
+| `--out=<dir>`             | `.` (current directory)                | Directory PNGs are written into; created if it doesn't exist. Pass `--out=` (empty) to print to the console only. |
+| `--search-min-n=<int>`    | `30`                                   | `search` only: minimum searches per (race, county) cell to plot — `plot_county_search_disparity()`'s `min_n`. |
+| `--county-min-stops=<int>` | `1000`                                 | `fit`/`compare` only: minimum total stops (any race) for a county to be eligible at all, before `--top-n-counties` and before any race split — `restrict_to_top_counties()`'s `min_stops`. |
+| `--top-n-counties=<int>`  | `100`                                   | `fit`/`compare` only: keep only this many of the largest eligible counties (pass `Inf` for no cap) — `restrict_to_top_counties()`'s `top_n`. |
+| `--group-min-n=<int>`     | `20`                                    | `fit`/`compare` only: minimum stops per (race, county) cell to retain — `aggregate_sufficient_statistics()`'s `min_n`. |
+| `--min-searches=<int>`    | `5`                                     | `fit`/`compare` only: minimum searches per cell for it to count toward fitting `(a, b)` — `fit_threshold_test()`'s `min_searches`. |
+| `--reference-race=<race>` | `white`                                 | Race every gap is computed against, and the GLM releveling reference.                        |
+
+```bash
+# The search-rate chart, the fit, and the comparison, defaults everywhere
+# (fit/compare restricted to the 100 largest counties with >= 1000 stops):
+Rscript duboisR/inst/scripts/cli.R threshold
+
+# Just the search-rate disparity chart -- now covers every race vs. white,
+# not just Black:
+Rscript duboisR/inst/scripts/cli.R threshold search --out=charts/
+
+# Just the comparison table + chart, against a different reference race:
+Rscript duboisR/inst/scripts/cli.R threshold compare --reference-race=hispanic
+
+# Console output only, no PNGs:
+Rscript duboisR/inst/scripts/cli.R threshold fit --out=
+
+# No county restriction on fit/compare -- every county
+# aggregate_sufficient_statistics()'s own --group-min-n allows through:
+Rscript duboisR/inst/scripts/cli.R threshold --county-min-stops=0 --top-n-counties=Inf
+```
+
+Read `hit_rate_gap` and `threshold_gap` for *direction*, not magnitude — they're on different scales (an observed conditional probability vs. an inferred risk cutoff). A sign flip between them (`agrees_in_direction == FALSE`) is the interesting case: it's the signature of infra-marginality distorting the naive outcome test's conclusion for that race.
+
+`--county-min-stops`/`--top-n-counties` restrict to the state's highest-volume counties *before* any of the above — a coarser, whole-county filter than `--group-min-n`'s per-(race, county) cell threshold. It exists to check whether [`fit_threshold_test()`](duboisR/R/threshold_test.R)'s fitted `(a, b)` collapsing to a near-degenerate, near-point-mass risk distribution (visible as extremely large `a`/`b` in the `fit` table) is a small-county noise artifact — restricting to the biggest, most stable counties and re-running is one way to test that. In practice on the full Texas dataset it isn't: the degeneracy persists (if anything the fitted `(a, b)` get *larger*) even restricted to the 100 largest counties, so it reflects the model finding very little within-race heterogeneity across big counties, not sparse-county noise.
 
 ### Datasheet
 

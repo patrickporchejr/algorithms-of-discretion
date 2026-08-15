@@ -6,29 +6,35 @@
 # section for a walkthrough; see ?duboisR::veil_of_darkness_module for the
 # underlying object this script is a thin wrapper around.
 #
+# Scoped to the stop decision only (both charts here are about who gets
+# pulled over, before vs. after dark). The search decision -- how often
+# people get searched, and how justified those searches are -- lives in
+# threshold_test_cli.R instead; it was never actually a Veil of Darkness
+# test (not restricted to daylight/dark or the intertwilight window), it
+# was only paired here for a "where does the disparity concentrate"
+# comparison chart that's been retired.
+#
 # Usage:
 #   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R [subcommand] [options]
 #
 # Subcommands (default: all):
 #   county      County-level VoD ratio (chart 1)
 #   statewide   Statewide before/after racial composition (chart 2)
-#   search      Search-rate disparity by county (chart 3)
-#   combined    Both mechanisms side by side (chart 4)
-#   all         All four, in one run
+#   all         Both charts, in one run
 #
 # Options:
-#   --data=<path>   Path to the processed CSV.
-#                   Default: data/processed/audit_ready_stops.csv
-#   --out=<dir>     Directory to write chart PNGs into. Pass --out= (empty)
-#                   to skip writing PNGs and only print to the console.
-#                   Default: .
-#   --min-n=<int>   Minimum county sample size for the two scatter charts
-#                   (county/search). Default: 30
+#   --data=<path>       Path to the processed CSV.
+#                       Default: data/processed/audit_ready_stops.csv
+#   --out=<dir>         Directory to write chart PNGs into. Pass --out=
+#                       (empty) to skip writing PNGs and only print to the
+#                       console. Default: .
+#   --min-n=<int>       Minimum county sample size for the county-level
+#                       scatter chart. Default: 30
 #
 # Examples:
 #   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R
 #   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R county --min-n=50
-#   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R combined --out=charts/
+#   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R statewide --out=charts/
 
 source("duboisR/inst/scripts/_load_duboisR.R")
 load_duboisR_or_die("duboisR")
@@ -40,19 +46,17 @@ Usage: Rscript duboisR/inst/scripts/veil_of_darkness_cli.R [subcommand] [options
 Subcommands (default: all):
   county      County-level VoD ratio (chart 1)
   statewide   Statewide before/after racial composition (chart 2)
-  search      Search-rate disparity by county (chart 3)
-  combined    Both mechanisms side by side (chart 4)
-  all         All four, in one run
+  all         Both charts, in one run
 
 Options:
-  --data=<path>   Path to the processed CSV. Default: data/processed/audit_ready_stops.csv
-  --out=<dir>     Directory to write chart PNGs into (--out= to skip PNGs). Default: .
-  --min-n=<int>   Minimum county sample size for the two scatter charts. Default: 30
+  --data=<path>        Path to the processed CSV. Default: data/processed/audit_ready_stops.csv
+  --out=<dir>          Directory to write chart PNGs into (--out= to skip PNGs). Default: .
+  --min-n=<int>        Minimum county sample size for the county-level scatter chart. Default: 30
 
 Examples:
   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R
   Rscript duboisR/inst/scripts/veil_of_darkness_cli.R county --min-n=50
-  Rscript duboisR/inst/scripts/veil_of_darkness_cli.R combined --out=charts/
+  Rscript duboisR/inst/scripts/veil_of_darkness_cli.R statewide --out=charts/
 "
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -76,7 +80,7 @@ data_path <- parse_flag("data", "data/processed/audit_ready_stops.csv")
 out_dir <- parse_flag("out", ".")
 min_n <- as.integer(parse_flag("min-n", "30"))
 
-valid_subcommands <- c("county", "statewide", "search", "combined", "all")
+valid_subcommands <- c("county", "statewide", "all")
 if (!subcommand %in% valid_subcommands) {
   stop(sprintf("Unknown subcommand '%s'. Valid: %s", subcommand, paste(valid_subcommands, collapse = ", ")))
 }
@@ -86,8 +90,12 @@ vod <- veil_of_darkness_module()
 vod$init(data_path = data_path)
 print(vod)
 
-save_plot <- function(plot, filename) {
+# caption, when given, is baked into the saved PNG itself (via
+# add_figure_caption()) -- not just printed to console -- so the image
+# stands alone if it's pulled directly into a paper/report.
+save_plot <- function(plot, filename, caption = NULL) {
   if (!nzchar(out_dir)) return(invisible(NULL))
+  if (!is.null(caption)) plot <- add_figure_caption(plot, caption)
   path <- file.path(out_dir, filename)
   ggplot2::ggsave(path, plot, width = 8, height = 5, dpi = 150)
   cli::cli_inform("Wrote {.path {path}}")
@@ -97,40 +105,25 @@ report_county <- function() {
   vod$plot_county_vod(min_n = min_n)
   cat("\n--- County-level Veil of Darkness ratio (chart 1) ---\n")
   print(vod$county_vod_disparity[vod$county_vod_disparity$total_n >= min_n, ])
-  save_plot(vod$vod_plot, "vod_county.png")
+  note <- interpret_county_vod_disparity(vod$county_vod_disparity, min_n = min_n)
+  cat(note, "\n")
+  save_plot(vod$vod_plot, "vod_county.png", caption = note)
 }
 
 report_statewide <- function() {
   vod$plot_statewide()
   cat("\n--- Statewide racial composition, before vs. after dark (chart 2) ---\n")
   print(vod$statewide_table)
-  save_plot(vod$statewide_plot, "vod_statewide.png")
-}
-
-report_search <- function() {
-  vod$plot_search_rate(min_n = min_n)
-  cat("\n--- County-level search-rate disparity (chart 3) ---\n")
-  cd <- vod$county_search_disparity
-  print(cd[cd$n_searches_black >= min_n & cd$n_searches_white >= min_n, ])
-  save_plot(vod$search_rate_plot, "vod_search_rate.png")
-}
-
-report_combined <- function() {
-  vod$plot_combined()
-  cat("\n--- Combined stop-vs-search figure (chart 4) ---\n")
-  cat("(descriptive only -- see 'county'/'search' subcommands for the underlying numbers)\n")
-  save_plot(vod$combined_plot, "vod_combined.png")
+  note <- interpret_statewide_vod(vod$statewide_table)
+  cat(note, "\n")
+  save_plot(vod$statewide_plot, "vod_statewide.png", caption = note)
 }
 
 switch(subcommand,
   county = report_county(),
   statewide = report_statewide(),
-  search = report_search(),
-  combined = report_combined(),
   all = {
     report_county()
     report_statewide()
-    report_search()
-    report_combined()
   }
 )
