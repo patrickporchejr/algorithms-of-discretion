@@ -5,28 +5,26 @@ This repository is the applied computational engine for the white paper:
 > **The Algorithmic Color Line: Auditing "Algorithms of Discretion" via QuantCrit and Du Boisian Sociology**  
 > _By: Patrick Eugene Porché Jr._  
 > [SocArXiv preprint](https://osf.io/preprints/socarxiv) (placeholder link until this paper's own preprint is posted)
+
 ---
 
 ## What this is
 
-Three pieces, one file-based pipeline:
+Two pieces, one file-based pipeline, all Python:
 
-- **Data Pipeline (Python, `python/`):** ingests Texas traffic-stop records from the Stanford Open Policing Project and performs spatial joins on County FIPS.
-- **`duboisR` (R package, `duboisR/`):** the Veil of Darkness natural-experiment test (Grogger & Ridgeway 2006) — sunset/dusk classification via `suncalc`, the intertwilight-hour design that makes the comparison valid, and the descriptive charts built on top of it. Also implements the Datasheets-for-Datasets provenance scaffolding (extended with a Du Boisian Positionality & Counter-Narrative section and an Audit Results Appendix, per Monroe-White & Lecy 2023) and the LLM datasheet-grounding experiment that several of the CLI's programs (below) drive.
-- **Shiny Dashboard (`r_dashboard/`):** a browser front end onto the precomputed Veil of Darkness, Threshold Test, and Data Transparency & Provenance tabs (see [The Veil of Darkness dashboard](#the-veil-of-darkness-dashboard) / [The Threshold Test dashboard](#the-threshold-test-dashboard)).
-- **CLI (`duboisR/inst/scripts/`):** five Rscript entry points — Veil of Darkness charts, the Threshold Test (+ naive outcome-test comparison), the datasheet generator, an audit-results autofill step, and the LLM grounding test (see [Command-line interface](#command-line-interface)).
+- **Data pipeline (`python/01_fetch_census.py`, `02_clean_stops.py`, `03_merge_features.py`):** ingests Texas traffic-stop records from the Stanford Open Policing Project, pulls county-level ACS covariates from the Census API, and joins them into one analysis-ready CSV.
+- **LLM datasheet-grounding experiment (`python/run_grounding.py` + `python/grounding_experiment.py`, `llm_clients.py`, `grounding_questions.py`, `datasheet.py`):** asks a flagship LLM the same fixed battery of questions about the dataset twice -- once with only a compact description of the data ("naive"), once with the same description plus this project's hand-authored `datasheet.json` ("grounded") -- and scores both against hand-authored expected answers. Measures, rather than asserts, whether a [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) provenance document actually changes a concrete downstream consumer's answers.
 
-`duboisR` also implements several other diagnostics from its broader Wells-Du Bois Protocol design (identity-proxy/tendentious-outcome checks, subpopulation disparity disaggregation) — exported and tested, but not part of the currently shipped dashboard/CLI surface this README documents. `?function_name` after `devtools::load_all("duboisR")` covers all of it if you go looking.
+There is no dashboard and no R code in this repository -- both are print-to-console tools you run locally.
 
 ---
 
 ## Data Sources
 
 1. **[Stanford Open Policing Project](https://openpolicing.stanford.edu/):** standardized traffic stop records, including timestamps, race/sex demographics, search outcomes, and county identifiers.
-2. **U.S. Census Bureau Gazetteer Files:** county centroid lat/lon (bundled in `duboisR`, TX-only), used to compute each stop's sunset/dusk time.
-3. **Astronomical solar position data:** sunset/civil-dusk calculations via `suncalc`, keyed on stop date + county centroid.
+2. **U.S. Census Bureau ACS 5-Year API:** county-level median household income and poverty rate, joined on normalized county name.
 
-**Geographic/temporal scope:** Texas only, 2015–2017 (~5.6M stops). See [Pointing the pipeline at a different state](#pointing-the-pipeline-at-a-different-state) to adapt it.
+**Geographic/temporal scope:** Texas only, 2015-2017 (~5.6M stops). See [Pointing the pipeline at a different state](#pointing-the-pipeline-at-a-different-state) to adapt it.
 
 ---
 
@@ -36,377 +34,121 @@ Administrative datasets reflect institutional policing practices rather than raw
 
 - **Missing Denominator:** administrative records capture who was stopped, not who drove by without being stopped.
 - **Enforcement Discretion:** stop volume reflects departmental priorities and pretextual enforcement.
-- **Reporting-rate assumption:** the Veil of Darkness design assumes race-specific *reporting* rates don't vary systematically between day and night, conditional on clock time — a weaker assumption than requiring equal absolute reporting rates, but still an assumption, not a guarantee.
-- **Hour-only time resolution:** the pipeline carries an integer stop hour, no minutes, so daylight/dark classification near sunset/dusk is coarser than the underlying astronomical calculation supports.
+- **Hour-only time resolution:** the pipeline carries an integer stop hour, no minutes -- any time-of-day analysis built on top of this data inherits that resolution ceiling.
+
+See `data/processed/datasheet.json` for the full, hand-authored account of this dataset's provenance, composition, and appropriate/inappropriate uses.
 
 ---
 
 ## Repo Layout
 
 ```
-├── Makefile                 # DAG over the pipeline: `make all` (data), `make results` (+ precompute)
+├── Makefile                 # `make all`/`make data` (pipeline), `make grounding` (opt-in, billed)
 ├── data/
-│   ├── raw/                 # Stanford Open Policing CSVs (gitignored)
-│   └── processed/           # Merged, analysis-ready dataset (gitignored)
-├── results/                 # Precomputed vod_charts.rds / threshold_test.rds the dashboard/CLI read (gitignored)
-├── python/                  # Data acquisition, cleaning, spatial join
-├── duboisR/                 # R package: the Wells-Du Bois Protocol diagnostic engine
-│   ├── R/                   # veil_of_darkness.R (+ _charts.R / _module.R), glm_utils.R, datasheet*.R, grounding_experiment.R, ...
-│   ├── inst/extdata/        # bundled TX county centroids (Veil of Darkness geodata)
-│   ├── inst/scripts/        # cli.R (single entry point), precompute_audit.R, + the 4 scripts cli.R dispatches to
-│   ├── tests/testthat/      # unit + parameter-recovery tests
-│   └── vignettes/           # theoretical grounding (QuantCrit, Du Bois, Wells)
-├── r_dashboard/             # Shiny app: the Veil of Darkness dashboard (consumes duboisR)
-└── notebooks/                # Scratch EDA, not pipeline code
+│   ├── raw/                 # Stanford Open Policing CSVs + Census pull (gitignored)
+│   └── processed/           # Merged, analysis-ready dataset (gitignored) + datasheet.json (hand-authored, tracked)
+├── results/                 # `make grounding` output (gitignored)
+├── python/
+│   ├── 01_fetch_census.py   # Census ACS pull
+│   ├── 02_clean_stops.py    # Stanford CSV cleaning/filtering
+│   ├── 03_merge_features.py # joins the two into audit_ready_stops.csv
+│   ├── datasheet.py         # read_datasheet() + DATASHEET_SCHEMA (no generation step -- see below)
+│   ├── llm_clients.py        # Anthropic/OpenAI/Gemini/Grok clients, forced structured output
+│   ├── grounding_questions.py # the fixed naive-vs-grounded question battery
+│   ├── grounding_experiment.py # prompt building, scoring, summarizing, console report
+│   ├── run_grounding.py      # CLI entry point for the experiment
+│   └── tests/                # pytest suite for all of the above
+└── notebooks/                 # scratch EDA, not pipeline code
 ```
 
 ## Setup
 
 ```bash
-# 1. Install R (the CLI, not the R.app cask — the cask installer needs sudo)
-brew install r
-Rscript -e 'install.packages(c("shiny","bslib","tidyverse","devtools"), repos="https://cloud.r-project.org")'
-
-# 1.5. Install duboisR itself (or just leave it -- r_dashboard/app.R falls back
-#      to `devtools::load_all("../duboisR")` automatically in dev mode)
-Rscript -e 'devtools::install("duboisR")'
-
-# 2. Python env
+# 1. Python env
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
-# 3. cp .env.example .env, then get a free Census API key
+# 2. cp .env.example .env, then get a free Census API key
 #    (https://api.census.gov/data/key_signup.html) and set CENSUS_API_KEY
 
-# 4. Download the raw Texas State Patrol CSV (~1GB zipped, ~7.2GB unzipped —
+# 3. Download the raw Texas State Patrol CSV (~1GB zipped, ~7.2GB unzipped --
 #    the pipeline reads directly from the .zip, no need to unzip by hand)
 curl -L -o data/raw/tx_statewide_2020_04_01.csv.zip \
   "https://stacks.stanford.edu/file/druid:yg821jf8611/yg821jf8611_tx_statewide_2020_04_01.csv.zip"
 
-# 5. Build everything: the 3-step Python pipeline, then the Veil of Darkness
-#    precompute. `make` only reruns steps whose inputs actually changed --
-#    see `make -n all results` to preview what would run.
+# 4. Build the dataset. `make` only reruns steps whose inputs actually
+#    changed -- see `make -n all` to preview what would run.
 make all       # -> data/processed/audit_ready_stops.csv (~5.6M rows)
-make results   # -> results/vod_charts.rds + results/threshold_test.rds (~2min, mostly
-               #    the sunset/dusk pass over the full dataset -- see
-               #    duboisR/inst/scripts/precompute_audit.R)
-
-# 6. Run the dashboard -- it renders the precomputed results/ artifacts, it does not fit anything live
-cd r_dashboard && Rscript -e 'shiny::runApp(".")'
 ```
 
 ---
 
-## The Veil of Darkness dashboard
+## The datasheet
 
-`r_dashboard/app.R` renders two descriptive charts, both about the *stop* decision only, built from `results/vod_charts.rds` via `duboisR`'s `summarize_*()`/`plot_*()` functions (`?plot_statewide_vod`, `?plot_county_vod_disparity`) — the same functions the CLI below calls, so the dashboard and CLI always render identically:
+`data/processed/datasheet.json` is a [Datasheets for Datasets](https://arxiv.org/abs/1803.09010)-style provenance document (extended with a Positionality & Counter-Narrative section and an Audit Results Appendix, per Monroe-White & Lecy 2023) for `audit_ready_stops.csv`. **There is no generation step.** Per the source paper, the qualitative reflection a datasheet captures is the point -- automating it away defeats the purpose. You write and edit it by hand.
 
-1. **Statewide before/after comparison** — each race's share of stops, compared directly across the daylight/dark boundary.
-2. **County-level Veil of Darkness ratio** — each county's Black share of inter-twilight stops, dark ÷ daylight. Near 1 across most counties is the descriptive signature the Grogger-Ridgeway hypothesis predicts if the *stop* decision isn't strongly race-driven.
+- `python/datasheet.py`'s `DATASHEET_SCHEMA` lists every section and question key this project recognizes (`motivation.purpose`, `composition.sensitive_data`, ...) -- use it as a reference for what to fill in, or look at the existing `data/processed/datasheet.json` for a fully worked example.
+- `read_datasheet(path)` raises (doesn't silently degrade) if `path` doesn't exist or parses to an empty document -- a missing/blank datasheet is a data-entry gap the grounding experiment needs to know about immediately, not something to paper over.
 
-The *search* decision (a separate discretion point, once a stop has already happened) used to live on this tab too — a search-rate-disparity chart, plus a "both mechanisms side by side" combined chart. Both moved to [the Threshold Test dashboard](#the-threshold-test-dashboard): search rate was never actually restricted to daylight/dark or the intertwilight window, so it didn't belong under Veil of Darkness — it belongs with the rest of the search-decision diagnostics.
-
-`duboisR` also ships a regression-based version of this test (`fit_veil_of_darkness()`, `race:is_dark` interaction model with closed-form Wald CIs — see `?fit_veil_of_darkness`) — exported and tested, but not part of the currently rendered dashboard/CLI, which are purely descriptive (no model fitting). It previously had its own dashboard section and CLI subcommand (the search decision's `race:is_dark` interaction GLM); both were removed after review — on the frozen dataset the fit didn't show anything that changed the picture, and the search decision is a structurally weaker Veil of Darkness test than the stop decision anyway (by the time an officer decides whether to search, they've typically already had close-up contact with the driver, so "was the original stop made after dark" is a shakier stand-in for "could the officer see race at *this* decision"). Call `fit_veil_of_darkness()` directly from the console if you want it.
+```bash
+python3 -c "
+import sys; sys.path.insert(0, 'python')
+import json, datasheet
+print(json.dumps(datasheet.DATASHEET_SCHEMA, indent=2))
+"
+```
 
 ---
 
-## The Threshold Test dashboard
+## LLM Grounding Test
 
-`r_dashboard/app.R`'s second tab — everything about the *search* decision, in order: how often people get searched (frequency), then how justified those searches are (quality/evidentiary bar). Built from `results/threshold_test.rds` (a cached `list(suff_stats =, fit =, county_search_rates =, county_search_disparity =)` — see `duboisR/inst/scripts/precompute_audit.R`) via the same `duboisR` functions the [Threshold Test CLI](#threshold-test) calls, so the dashboard and CLI always render identically:
+`python/run_grounding.py` asks a flagship LLM the same fixed battery of boolean/multiple-choice/numeric questions about the dataset (`grounding_questions.QUESTIONS`) twice -- once given only a compact, pseudonymized description of the schema plus a small random sample ("naive"), once given the same description plus `datasheet.json`'s full content and an instruction to consult it first ("grounded") -- and scores both against each question's hand-authored expected answer.
 
-1. **Search-rate disparity by county** ([`summarize_county_search_disparity()`](duboisR/R/threshold_test.R) + `plot_county_search_disparity()`) — every race's search rate vs. a reference race (default white), one dot per county. A pure frequency comparison — how *often* someone gets searched, not whether the search finds anything. Covers every race in the data (Black **and** Hispanic vs. White), not just a hardcoded pair.
-2. **Threshold Test fit** ([`fit_threshold_test()`](duboisR/R/threshold_test.R) + `plot.duboisR_threshold_fit()`) — each county's search rate vs. hit rate, with a fitted Beta risk-distribution curve per race (in the spirit of Simoiu, Corbett-Davies & Goel 2017's infra-marginality correction). A race whose fitted `(a, b)` is near-degenerate gets a dashed curve, flagged in the subtitle — that's a caution about the fit, not a reference line.
-3. **Naive outcome test vs. corrected estimate** ([`compare_outcome_threshold_test()`](duboisR/R/threshold_test.R) + `plot_outcome_threshold_comparison()`) — the classic (Ayres 2002) pooled hit-rate gap next to the Threshold Test's inferred-threshold gap, plus the underlying comparison table (`hit_rate_gap`, `threshold_gap`, `agrees_in_direction`).
-
-Every panel is followed by a plain-language interpretation generated from the actual numbers (`interpret_search_rate_disparity()` / `interpret_threshold_fit()` / `interpret_outcome_threshold_comparison()`), not static copy — same pattern as the Veil of Darkness tab.
-
-On the frozen dataset: the typical county searches Black drivers at ~2.5× the rate of White drivers and Hispanic drivers at ~1.6× (chart 1) — but chart 3 shows Black drivers' hit rate is essentially identical to White drivers' once searched, while Hispanic drivers' hit rate is ~15 points lower under *both* the naive and corrected methods. Read together: the Black disparity concentrates in *whether* a search happens at all, not its evidentiary quality; the Hispanic disparity is the opposite — a genuinely lower bar for triggering a search in the first place.
-
-Chart 2/3's fit restricts to the 100 largest counties with ≥1000 stops (`restrict_to_top_counties()`) before fitting — fitting against every county left the sparser races' `(a, b)` non-convergent; restricting doesn't change the substantive finding (Hispanic drivers' inferred threshold stays meaningfully lower than white/Black drivers' either way), it just fixes convergence. Chart 1 is **not** restricted this way — a plain descriptive ratio doesn't need that stabilization. See [Threshold Test](#threshold-test) below for the CLI's `--county-min-stops`/`--top-n-counties` flags if you want a different cut.
-
----
-
-## Command-line interface
-
-Every command-line program in this project is called the same way, through one dispatcher:
-
-```bash
-Rscript duboisR/inst/scripts/cli.R <command> [options]
-```
-
-| Command     | What it does                                                      |
-| ----------- | -------------------------------------------------------------------- |
-| `veil`      | Print/save the two stop-decision Veil of Darkness charts (see below) |
-| `threshold` | Search-rate disparity, the Threshold Test, and its naive-outcome-test comparison (see below) |
-| `datasheet` | Seed a first-pass `datasheet.json` for the processed dataset       |
-| `autofill`  | Fill `datasheet.json`'s Audit Results Appendix from the latest `results/*.rds` (run after `make results`) |
-| `grounding` | Run the naive-vs-grounded LLM datasheet-grounding experiment (also writes its PDFs) |
-| `grounding-report` | Re-render the grounding experiment's PDFs from an existing `results/*.rds` (no API calls) |
-
-`Rscript duboisR/inst/scripts/cli.R --help` lists all commands; `Rscript duboisR/inst/scripts/cli.R <command> --help` prints that command's own options — every command supports `--help`. Each command is also its own independently runnable script (`Rscript duboisR/inst/scripts/veil_of_darkness_cli.R ...`, etc., named in each subsection below) — `cli.R <command> [options]` is a thin dispatcher onto the exact same script with the exact same options, not a separate implementation, so either form does the same thing.
-
-### Veil of Darkness charts
-
-`veil` (`duboisR/inst/scripts/veil_of_darkness_cli.R`), a thin wrapper around `duboisR::veil_of_darkness_module()` (see `?duboisR::veil_of_darkness_module`), loads the processed data, classifies daylight/dark status, and prints/saves each of the two stop-decision charts above. (The search decision's charts moved to the [Threshold Test](#threshold-test) CLI command — see that section.)
-
-```bash
-Rscript duboisR/inst/scripts/cli.R veil [subcommand] [options]
-```
-
-**Subcommands** (positional; default `all` if omitted):
-
-| Subcommand   | What it prints                                   | PNG written (`--out`)  |
-| ------------ | ------------------------------------------------- | ----------------------- |
-| `county`     | Chart 1's table (`total_n >= --min-n` only)       | `vod_county.png`        |
-| `statewide`  | Chart 2's before/after table, one row per race    | `vod_statewide.png`     |
-| `all`        | Runs both of the above, in that order | both files above  |
-
-Every subcommand also prints a one-line `<duboisR_vod_module>` summary (rows loaded, inter-twilight rows, county count) before its own output — that's `print(vod)` under the hood, same object as the console usage below.
-
-**Options:**
-
-| Flag           | Default                                  | Meaning                                                                                     |
-| -------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `--data=<path>` | `data/processed/audit_ready_stops.csv`   | Path to the processed CSV, resolved relative to wherever you run the script from.             |
-| `--out=<dir>`   | `.` (current directory)                  | Directory PNGs are written into; created if it doesn't exist. Pass `--out=` (empty) to print to the console only and skip `ggsave()` entirely. |
-| `--min-n=<int>` | `30`                                     | Minimum county sample size for the county-level scatter chart (`county`'s `total_n`) — counties below this are dropped from both the printed table and the plot, same threshold `plot_county_vod_disparity()` takes directly. |
-
-`--help`/`-h` (checked before anything else runs, so it works even without a processed dataset on disk) prints the same subcommand/option reference as a plain usage string and exits.
-
-```bash
-# Both charts, defaults everywhere:
-Rscript duboisR/inst/scripts/cli.R veil
-
-# Just the county-level scatter, a higher min-county-size cutoff, saved
-# to a subdirectory instead of the current one:
-Rscript duboisR/inst/scripts/cli.R veil county --min-n=50 --out=charts/
-
-# Console output only, no PNGs:
-Rscript duboisR/inst/scripts/cli.R veil statewide --out=
-
-# Point it at a differently-located processed CSV (the synthetic dataset
-# from "Pointing the pipeline at a different state" below writes to the
-# same default path, so --data is only needed if yours lives elsewhere):
-Rscript duboisR/inst/scripts/cli.R veil all --data=/path/to/audit_ready_stops.csv
-```
-
-### Using the module directly (console, or your own script)
-
-`veil_of_darkness_module()` is what the CLI above wraps — call it the same
-way from an R console or another script, with every intermediate table
-left readable off the returned object directly instead of only returned
-from the call that built it (see §5.3 of [DESIGN.md](DESIGN.md) for how
-it's implemented):
-
-```r
-devtools::load_all("duboisR")
-vod <- veil_of_darkness_module()
-vod$init(data_path = "data/processed/audit_ready_stops.csv")
-```
-
-`$init(data_path, date_col = "date", hour_col = "hour", county_fips_col = "county_fips", race_col = "subject_race", race_ref = "white", centroids = NULL, config = list())` loads and prepares everything downstream needs, once. Every argument past `data_path` matches the corresponding `compute_daylight_status()`/`prepare_veil_of_darkness_data()` argument if your data uses different column names; `config` is reserved for future options and currently unused. It sets:
-
-| Field                     | What it is                                                                 |
-| -------------------------- | --------------------------------------------------------------------------- |
-| `$stops`                  | The loaded, race-releveled data                                            |
-| `$county_centroids`       | `dubois_tx_centroids()` (or your own `centroids` argument)                 |
-| `$stops_geo`               | Every stop with lat/lon/sunset/dusk/`is_dark` attached                     |
-| `$sun_times`               | The distinct date × county sunset/dusk lookup `$stops_geo` was built from  |
-| `$vod_data`                | The intertwilight-restricted subset (`prepare_veil_of_darkness_data()$fit_data`) |
-| `$county_vod_disparity`    | Chart 1's table                                                             |
-| `$statewide_vod`           | Chart 2's table                                                             |
-
-Search rate (`summarize_county_search_rates()`/`summarize_county_search_disparity()`) isn't part of this module -- it was never tied to daylight/dark classification, so call those functions directly instead (see [Threshold Test](#threshold-test)).
-
-Then, one method per chart — each builds, stores, and returns:
-
-| Method                          | Stores as             | Also stores                |
-| --------------------------------- | ---------------------- | ----------------------------- |
-| `$plot_county_vod(min_n = 30)`    | `$vod_plot`            | —                              |
-| `$plot_statewide()`               | `$statewide_plot`      | `$statewide_table`            |
-| `$fit_regression(outcome_var = "search_conducted", interaction = TRUE, control_map = list(), controls_selected = character(0))` | `$regression_fit` | the actual `race:is_dark` interaction GLM (see [`fit_veil_of_darkness()`](duboisR/R/veil_of_darkness.R)) — `interaction` defaults to `TRUE` here (the opposite of `fit_veil_of_darkness()`'s own default), since a caller reaching for this method already wants the interaction term, not the additive model |
-
-```r
-print(vod)                    # <duboisR_vod_module> summary + which charts are built
-vod$plot_county_vod()          # chart 1, also stored as vod$vod_plot
-vod$county_vod_disparity      # the underlying table is right there too
-vod$plot_county_vod(min_n = 50)  # rebuild chart 1 with a different cutoff any time
-vod$fit_regression()          # the race:is_dark interaction GLM, also stored as vod$regression_fit
-print(vod$regression_fit)     # coefficient table (odds ratios) + caveats
-plot(vod$regression_fit)      # forest plot of the is_dark/interaction terms
-```
-
-### Threshold Test
-
-`threshold` (`duboisR/inst/scripts/threshold_test_cli.R`) covers everything about the search decision: how often people get searched by race ([`summarize_county_search_disparity()`](duboisR/R/threshold_test.R)), the fast Threshold Test approximation for infra-marginality ([`fit_threshold_test()`](duboisR/R/threshold_test.R), in the spirit of Simoiu, Corbett-Davies & Goel 2017) against `search_conducted`/`contraband_found`, and the classic (Ayres 2002) outcome test computed on the same sufficient statistics ([`compare_outcome_threshold_test()`](duboisR/R/threshold_test.R)) — the naive baseline the Threshold Test corrects for infra-marginality.
-
-```bash
-Rscript duboisR/inst/scripts/cli.R threshold [subcommand] [options]
-```
-
-**Subcommands** (positional; default `all` if omitted):
-
-| Subcommand | What it prints                                                          | PNG written (`--out`)              |
-| ---------- | -------------------------------------------------------------------------- | ------------------------------------- |
-| `search`   | Search-rate disparity by county, every race vs. `--reference-race` (a frequency comparison, not restricted to `--county-min-stops`/`--top-n-counties` below) | `search_rate_disparity.png`        |
-| `fit`      | Per-race `(a, b)`/threshold summary                                     | `threshold_test.png`               |
-| `compare`  | The comparison table (`hit_rate`/`hit_rate_gap` vs. `mean_threshold_weighted`/`threshold_gap`, plus `agrees_in_direction`) | `outcome_threshold_comparison.png` |
-| `all`      | All three of the above, in that order (default)                          | all three files above              |
-
-**Options:**
-
-| Flag                      | Default                                | Meaning                                                                                     |
-| ------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `--data=<path>`           | `data/processed/audit_ready_stops.csv` | Path to the processed CSV.                                                                    |
-| `--out=<dir>`             | `.` (current directory)                | Directory PNGs are written into; created if it doesn't exist. Pass `--out=` (empty) to print to the console only. |
-| `--search-min-n=<int>`    | `30`                                   | `search` only: minimum searches per (race, county) cell to plot — `plot_county_search_disparity()`'s `min_n`. |
-| `--county-min-stops=<int>` | `1000`                                 | `fit`/`compare` only: minimum total stops (any race) for a county to be eligible at all, before `--top-n-counties` and before any race split — `restrict_to_top_counties()`'s `min_stops`. |
-| `--top-n-counties=<int>`  | `100`                                   | `fit`/`compare` only: keep only this many of the largest eligible counties (pass `Inf` for no cap) — `restrict_to_top_counties()`'s `top_n`. |
-| `--group-min-n=<int>`     | `20`                                    | `fit`/`compare` only: minimum stops per (race, county) cell to retain — `aggregate_sufficient_statistics()`'s `min_n`. |
-| `--min-searches=<int>`    | `5`                                     | `fit`/`compare` only: minimum searches per cell for it to count toward fitting `(a, b)` — `fit_threshold_test()`'s `min_searches`. |
-| `--reference-race=<race>` | `white`                                 | Race every gap is computed against, and the GLM releveling reference.                        |
-
-```bash
-# The search-rate chart, the fit, and the comparison, defaults everywhere
-# (fit/compare restricted to the 100 largest counties with >= 1000 stops):
-Rscript duboisR/inst/scripts/cli.R threshold
-
-# Just the search-rate disparity chart -- now covers every race vs. white,
-# not just Black:
-Rscript duboisR/inst/scripts/cli.R threshold search --out=charts/
-
-# Just the comparison table + chart, against a different reference race:
-Rscript duboisR/inst/scripts/cli.R threshold compare --reference-race=hispanic
-
-# Console output only, no PNGs:
-Rscript duboisR/inst/scripts/cli.R threshold fit --out=
-
-# No county restriction on fit/compare -- every county
-# aggregate_sufficient_statistics()'s own --group-min-n allows through:
-Rscript duboisR/inst/scripts/cli.R threshold --county-min-stops=0 --top-n-counties=Inf
-```
-
-Read `hit_rate_gap` and `threshold_gap` for *direction*, not magnitude — they're on different scales (an observed conditional probability vs. an inferred risk cutoff). A sign flip between them (`agrees_in_direction == FALSE`) is the interesting case: it's the signature of infra-marginality distorting the naive outcome test's conclusion for that race.
-
-`--county-min-stops`/`--top-n-counties` restrict to the state's highest-volume counties *before* any of the above — a coarser, whole-county filter than `--group-min-n`'s per-(race, county) cell threshold. It exists to check whether [`fit_threshold_test()`](duboisR/R/threshold_test.R)'s fitted `(a, b)` collapsing to a near-degenerate, near-point-mass risk distribution (visible as extremely large `a`/`b` in the `fit` table) is a small-county noise artifact — restricting to the biggest, most stable counties and re-running is one way to test that. In practice on the full Texas dataset it isn't: the degeneracy persists (if anything the fitted `(a, b)` get *larger*) even restricted to the 100 largest counties, so it reflects the model finding very little within-race heterogeneity across big counties, not sparse-county noise.
-
-### Datasheet
-
-`datasheet` (`duboisR/inst/scripts/seed_demo_datasheet.R`) seeds a non-interactive first-pass [Datasheets-for-Datasets](https://arxiv.org/abs/1803.09010) provenance document for `audit_ready_stops.csv`:
-
-```bash
-Rscript duboisR/inst/scripts/cli.R datasheet                # -> data/processed/datasheet.json
-Rscript duboisR/inst/scripts/cli.R datasheet --overwrite     # replace existing answers, not just fill blanks
-```
-
-For the interactive, resumable version (or a static template with no automation) — genuinely R-console-only, since it prompts via `readline()` and refuses to run under a non-interactive `Rscript` session, so it can't be a `cli.R` command the way the other two are — call the underlying `duboisR` functions directly instead:
-
-```r
-devtools::load_all("duboisR")
-build_datasheet_wizard(output = "data/processed/datasheet.json")   # interactive, resumable
-# or: use_datasheet("datasheet.md")                                # static template only
-```
-
-To edit a section's free text directly (no wizard, no re-running any script), `data/processed/datasheet.json` is plain JSON — hand-edit it, or call `duboisR::seed_datasheet_answers(list(section = list(question = "text")), path = "data/processed/datasheet.json")` from an R console for a scripted one-field update. Either path is a normal way to fill in the qualitative sections (Motivation, Positionality & Counter-Narrative, Uses, ...) that `autofill` (below) deliberately never touches.
-
-### Autofill (Audit Results Appendix)
-
-`autofill` (`duboisR/inst/scripts/autofill_datasheet.R`) writes the datasheet's **Audit Results Appendix** section straight from whatever is currently in `results/vod_charts.rds` and `results/threshold_test.rds` — every sentence comes from `duboisR`'s own `interpret_*()` functions run against the live cached results, not hand-transcribed prose. Run it after regenerating charts (`make results`, or `Rscript duboisR/inst/scripts/precompute_audit.R` directly) so the appendix never drifts from what the Veil of Darkness / Threshold Test tabs are actually showing:
-
-```bash
-Rscript duboisR/inst/scripts/cli.R autofill                # fills only if audit_appendix is currently blank
-Rscript duboisR/inst/scripts/cli.R autofill --overwrite     # refresh with the latest numbers (usual choice after `make results`)
-```
-
-### LLM Grounding Test
-
-`grounding` (`duboisR/inst/scripts/run_grounding_experiment.R`) asks a flagship LLM the same fixed battery of boolean/multiple-choice/numeric questions about the dataset twice — once given only a compact, pseudonymized description ("naive"), once given the same description plus an explicit instruction to read `datasheet.json` first ("grounded") — and scores both against hand-authored expected answers, so the value of the datasheet is measured rather than asserted (see `duboisR::run_grounding_experiment()`).
+**Runs with or without a datasheet.** If `data/processed/datasheet.json` exists, both conditions run and get compared; if it doesn't (or `--no-datasheet` is passed), only the naive condition runs. This is the one thing the CLI branches on -- there's no separate "mode" flag beyond that.
 
 ```bash
 # Set at least one of these in your .env (see .env.example):
 #   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / XAI_API_KEY
-Rscript duboisR/inst/scripts/cli.R grounding                          # -> results/grounding_experiment.rds + 3 PDFs
-Rscript duboisR/inst/scripts/cli.R grounding --repeats=1              # halve the billed calls while iterating
-Rscript duboisR/inst/scripts/cli.R grounding --restart                # ignore an existing checkpoint, start over
+cd python && python run_grounding.py                    # naive+grounded if datasheet.json exists, else naive-only
+python run_grounding.py --no-datasheet                   # force naive-only even if a datasheet exists
+python run_grounding.py --repeats=1                       # halve the billed calls while iterating (default 2 trials/condition)
+python run_grounding.py --restart                         # ignore an existing checkpoint, start over
+python run_grounding.py --datasheet=/path/to/datasheet.json  # point at a different datasheet
 
-# Makefile shortcut for the first form above (chains the same script):
+# Makefile shortcut (passes ARGS through, e.g. `make grounding ARGS="--repeats=1"`):
 make grounding
 ```
 
-Real, billed API calls — not part of `make all`/`make results`, and needs a datasheet to already exist (run the Datasheet step above first). See a dated cost snapshot in a comment near the top of `duboisR/inst/scripts/run_grounding_experiment.R`.
+Real, billed API calls -- not part of `make all`. Every completed (provider, condition, trial) call is checkpointed to `results/grounding_experiment_checkpoint.json` as the run goes, so a crash/rate-limit/Ctrl-C partway through resumes instead of re-billing; the checkpoint is cleared on a clean finish. The full result is saved to `results/grounding_experiment.json` and a summary report is printed straight to the console (accuracy by provider/condition, mean answer stability across trials, how many question/provider pairs flipped their majority-vote answer once grounded).
 
-Every `grounding` run also writes three report-ready PDFs to `results/` (see `duboisR::write_grounding_report()`): `grounding_accuracy_table.pdf` (accuracy by provider/condition), `grounding_accuracy_chart.pdf` (naive-vs-grounded accuracy, `duboisR::plot_grounding_accuracy()`), and `grounding_per_question.pdf` (one row per question, naive → grounded per provider, paginated). To re-render just the PDFs from an existing `results/grounding_experiment.rds` — no API calls, safe to iterate on formatting — use `grounding-report`:
+`n_repeats > 1` runs independent trials per (provider, condition) -- providers aren't called at temperature 0, so a single trial's "changed answer" could be sampling noise; repeats let the summary report a majority-vote answer and a per-question stability rate instead of trusting one draw.
 
-```bash
-Rscript duboisR/inst/scripts/cli.R grounding-report                   # re-reads results/grounding_experiment.rds
-Rscript duboisR/inst/scripts/cli.R grounding-report --rds=<path> --out=<dir>
-```
-
-`make clean` removes every generated file (`data/processed/*.csv`, `results/`) so you can rebuild from scratch; it does *not* touch the raw Stanford download.
+Every provider call is forced through a JSON-Schema-constrained tool call rather than parsed free text (`grounding_experiment.response_schema()`), with confidence nested per-answer so the report can tell "grounding changed the answer" apart from "grounding changed how sure the model was."
 
 ---
 
 ## Pointing the pipeline at a different state
 
-The Stanford Open Policing Project publishes one "State Patrol" file per state, each at its own URL (Stanford's `stacks.stanford.edu` assigns a unique "druid" ID per file — there's no predictable pattern to construct it from a state abbreviation).
+The Stanford Open Policing Project publishes one "State Patrol" file per state, each at its own URL (Stanford's `stacks.stanford.edu` assigns a unique "druid" ID per file -- there's no predictable pattern to construct it from a state abbreviation).
 
 1. Go to the [data page](https://openpolicing.stanford.edu/data/), find your target state's State Patrol download link.
 2. Update what's currently Texas-hardcoded:
    - **`python/01_fetch_census.py`**: `TARGET_STATE_FIPS` (Texas is `"48"`).
-   - **`python/02_clean_stops.py`**: the raw file path and `RAW_COLUMNS_NEEDED` — Stanford's schema isn't fully uniform across states; check the new file's header first.
+   - **`python/02_clean_stops.py`**: the raw file path and `RAW_COLUMNS_NEEDED` -- Stanford's schema isn't fully uniform across states; check the new file's header first.
    - **`Makefile`**: the `RAW_STOPS` variable, to match the new raw filename.
-   - **`duboisR`'s county centroid table**: `dubois_tx_centroids()` / `inst/extdata/tx_county_centroids.csv` is Texas-only today (FIPS prefix `48`). Veil of Darkness needs a lat/lon centroid per county to compute sunset/dusk; without a matching table it warns "no centroid match" and drops every row. Regenerate one by adapting `duboisR/data-raw/build_tx_county_centroids.R` (its source is a *national* Census Gazetteer file) — just change the `substr(.data$GEOID, 1, 2) == "48"` filter to your state's FIPS prefix.
-3. Re-run `make all && make results` (`make clean` first for a fully fresh run).
+3. Re-run `make all` (`make clean` first for a fully fresh run).
 
 **Schema realities discovered wiring this up:**
-- No FIPS code at the stop level in the raw file — only `county_name` text; the pipeline joins to Census county data on a normalized name, and FIPS is carried through from the Census side afterward.
-- No `subject_age` — Texas State Patrol doesn't report it.
-- 27.4M raw rows is too large to fit live in an interactive session; `02_clean_stops.py` filters to 2015–2017 (~5.6M rows).
-
-You can still run the **dashboard against synthetic data** for pure plumbing checks, without any of the above:
-
-```bash
-Rscript r_dashboard/dev/generate_synthetic_data.R      # writes data/processed/audit_ready_stops.csv
-Rscript duboisR/inst/scripts/precompute_audit.R         # -> results/vod_charts.rds, same as `make results`
-cd r_dashboard && Rscript -e 'shiny::runApp(".")'
-```
-
-**Both of these write to the same paths the real pipeline uses** — if you already have a real dataset built, back up `data/processed/audit_ready_stops.csv` and `results/` first. Synthetic data is for plumbing checks only — treat any numbers it produces as meaningless.
-
-**macOS gotchas** if package installs fail to compile:
-- If `xcode-select -p` points at a broken/corrupted Xcode.app, point it at the Command Line Tools instead: `sudo xcode-select -s /Library/Developer/CommandLineTools`
-- If compilation fails with `invalid value 'gnu23'`, force an older C standard via `~/.R/Makevars`: `CC = clang -std=gnu17`
-- `tidyverse` (via `ragg`/`textshaping`) needs a few system libs: `brew install harfbuzz fribidi libtiff`
+- No FIPS code at the stop level in the raw file -- only `county_name` text; the pipeline joins to Census county data on a normalized name, and FIPS is carried through from the Census side afterward.
+- No `subject_age` -- Texas State Patrol doesn't report it.
+- 27.4M raw rows is too large to fit live in an interactive session; `02_clean_stops.py` filters to 2015-2017 (~5.6M rows).
 
 ---
 
-## Deployment (shinyapps.io)
-
-`r_dashboard/` is set up to deploy as a self-contained bundle via [`rsconnect`](https://rstudio.github.io/rsconnect/). Two things make that non-obvious:
-
-- **`app.R`'s paths are dual-mode.** In dev, it reaches out to the sibling `../duboisR` and `../results` directories. shinyapps.io only uploads the directory you deploy, so `app.R` checks for a bundled `results/`/`duboisR/` inside `r_dashboard/` first and only falls back to the sibling paths when those aren't present. `r_dashboard/deploy/prepare.sh` populates that bundled copy.
-- **`duboisR` isn't on CRAN, and isn't renv-installed for deploy.** `duboisR` is listed in `renv/settings.json`'s `ignored.packages`, and `deploy/prepare.sh` stages a plain source copy at `r_dashboard/duboisR/` instead; `app.R` loads it with `pkgload::load_all()` at startup. `duboisR`'s own dependencies (`rlang`, `ggplot2`, `suncalc`, etc.) are still ordinary CRAN packages renv resolves normally.
-
-**One-time setup:**
+## Testing
 
 ```bash
-# 1. Create a free account at https://www.shinyapps.io, then from its
-#    dashboard: Account > Tokens > Show, to get a token + secret.
-
-# 2. From inside r_dashboard/ (so .Rprofile activates its renv project and
-#    rsconnect/duboisR are both visible to the session):
-cd r_dashboard
-Rscript -e 'renv::install("rsconnect")'   # dev tooling only, not an app dependency -- deliberately not in renv.lock
-Rscript -e 'rsconnect::setAccountInfo(name="<account>", token="<token>", secret="<secret>")'
+pip install -r requirements-dev.txt
+pytest python/tests -v
 ```
 
-`setAccountInfo()` writes straight to `rsconnect`'s local config — never commit a token/secret to the repo or paste them anywhere shared.
-
-**Every deploy:**
-
-```bash
-make deploy   # results (if stale) -> stage results -> rsconnect::deployApp(".")
-```
-
-`make deploy` chains `results`, runs `r_dashboard/deploy/prepare.sh` to stage `results/vod_charts.rds` and a plain source copy of `duboisR/` into `r_dashboard/`, then calls `rsconnect::deployApp(".")`. The `APP_NAME` variable at the top of the `Makefile` controls the app name it deploys under.
-
-**Fresh clone / new machine.** `r_dashboard/renv/library` is gitignored, so after cloning, run `renv::restore()` from inside `r_dashboard/` to rebuild it — this covers every CRAN dependency, but not `duboisR` itself, which renv is told to ignore (see above). For local dev, `app.R` finds it via the sibling `../duboisR` checkout that comes with the clone.
+`python/tests/_helpers.py`'s `import_script()` loads the numbered pipeline scripts (`01_fetch_census.py`, ...) by file path, since their filenames start with a digit and can't be `import`ed normally; it also puts `python/` on `sys.path` so the grounding modules (which don't have that naming constraint) import each other normally. `.github/workflows/ci.yml` runs the suite on every push/PR against `main`.
