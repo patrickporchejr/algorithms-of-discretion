@@ -29,11 +29,11 @@ RAW_COLUMNS_NEEDED = [
     "search_basis",
 ]
 
-# Final columns written to stops_clean.csv. Beyond what the current dashboard
-# queries, this also carries date/violation/search_basis for planned-but-not-
-# yet-built features: Veil of Darkness (needs the calendar date to compute
-# sunset time per county/day, not just hour), pretextual-stop analysis
-# (violation), and consent-vs-probable-cause search disparities (search_basis).
+# Final columns written to stops_clean.csv. Beyond what the grounding
+# experiment's data context currently reports, this also carries
+# date/violation/search_basis for analyses this repo doesn't implement:
+# time-of-day/seasonal effects (date), pretextual-stop analysis (violation),
+# and consent-vs-probable-cause search disparities (search_basis).
 OUTPUT_COLUMNS = [
     "subject_race",
     "subject_sex",
