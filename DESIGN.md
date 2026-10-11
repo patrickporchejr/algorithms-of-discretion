@@ -165,7 +165,7 @@ straight to the console: accuracy by provider/condition, mean answer
 stability across trials, and how many question/provider pairs flipped
 their majority-vote answer once grounded in the datasheet. There's no PDF
 or chart export -- the console report is the only output surface,
-deliberately, since nothing downstream (no dashboard, no paper-figure
+deliberately, since nothing downstream (no dashboard, no figure-export
 pipeline) currently consumes anything richer.
 
 ---

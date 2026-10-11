@@ -1,10 +1,6 @@
 # Algorithms of Discretion
 
-This repository is the applied computational engine for the white paper:
-
-> **The Algorithmic Color Line: Auditing "Algorithms of Discretion" via QuantCrit and Du Boisian Sociology**  
-> _By: Patrick Eugene Porché Jr._  
-> [SocArXiv preprint](https://osf.io/preprints/socarxiv) (placeholder link until this paper's own preprint is posted)
+Auditing algorithmic discretion in Texas traffic stops: a Python data pipeline plus an eval that measures whether a dataset datasheet changes an LLM's answers.
 
 ---
 
