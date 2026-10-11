@@ -2,6 +2,8 @@
 
 Auditing algorithmic discretion in Texas traffic stops: a Python data pipeline plus an eval that measures whether a dataset datasheet changes an LLM's answers.
 
+> **About the paper.** This project accompanies my paper *The Algorithmic Color Line: Auditing "Algorithms of Discretion" via QuantCrit and Du Boisian Sociology*. It's an unfinished draft and I'm not publishing it yet. If you'd like to read the draft, reach out on [LinkedIn](https://www.linkedin.com/in/pporche87/).
+
 ---
 
 ## What this is
